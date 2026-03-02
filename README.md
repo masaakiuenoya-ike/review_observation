@@ -15,6 +15,8 @@ Google Business Profile（GBP）のレビュー・評価を定点観測し、Big
 | [review_observation_SSOT設計書_20260302_rev2.md](review_observation_SSOT設計書_20260302_rev2.md) | データモデル・処理フロー・認証・実装順の確定版 |
 | [infra/gcloud_commands.md](infra/gcloud_commands.md) | GCP の手順（BQ / GCS / SA / Secret Manager / WIF / Scheduler 等） |
 | [docs/疑問点.md](docs/疑問点.md) | 設計書に基づく疑問点の整理・解消状況 |
+| [docs/店舗マスタ参照.md](docs/店舗マスタ参照.md) | store_code の正: BigQuery **ikeuchi-ga4.stg_freee_prd.dim_store** の store_id（文字列） |
+| [docs/GBPデータソース.md](docs/GBPデータソース.md) | 月次パフォーマンスの**現在のデータ**の出所: **tmp/Googleビジネスプロフィール集計.xlsx** の **GBPサマリー** シート |
 
 ---
 
@@ -35,7 +37,52 @@ Google Business Profile（GBP）のレビュー・評価を定点観測し、Big
 4. **GitHub Secrets** に以下も登録: `GCS_EXPORT_BUCKET`、`SHEET_ID`（必要なら `GCP_PROJECT_ID`）。
 5. **Secret Manager**: §5.1 で `gbp-oauth-json` を作成し、実行 SA に secretAccessor を付与。OAuth JSON（client_id, client_secret, refresh_token）を `gcloud secrets versions add` で登録する。
 6. **スプレッドシート**: 書き込み先シートを **sa-review-observation-run@ikeuchi-data-sync.iam.gserviceaccount.com** に **編集者** で共有する。
-7. **places_provider_map**: BigQuery の `mart_gbp.places_provider_map` に 1 店舗以上を手動で INSERT する（設計書・infra を参照）。
+7. **places_provider_map**: BigQuery の `mart_gbp.places_provider_map` に 1 店舗以上を手動で INSERT する。**store_code** は店舗マスタ `ikeuchi-ga4.stg_freee_prd.dim_store` の **store_id** を文字列にした値（[docs/店舗マスタ参照.md](docs/店舗マスタ参照.md) 参照）。
+8. **既存月次データのインポート**（任意）: **dim_store に存在する全店舗**を対象に、**places_provider_map 登録直後**に [docs/既存月次データのインポート.md](docs/既存月次データのインポート.md) に従い `performance_monthly_snapshot` へ投入する。SQL: [sql/020_import_historical_monthly_performance.sql](sql/020_import_historical_monthly_performance.sql)（全店舗分は [scripts/gen_020_import_monthly.py](scripts/gen_020_import_monthly.py) で再生成可）。
+
+---
+
+## 今後実施すべき手順（チェックリスト）
+
+初回セットアップ（上記 §1–8）のあと、次の順で進める。
+
+| # | 項目 | 参照 |
+|---|------|------|
+| 1 | places_provider_map に **dim_store の全店舗**を登録（store_code = store_id の文字列） | 設計書 §3.1 / [docs/店舗マスタ参照.md](docs/店舗マスタ参照.md) |
+| 2 | 既存月次データのインポート（全店舗を対象に 2023-07/08/09 を挿入。登録直後に実施） | [docs/既存月次データのインポート.md](docs/既存月次データのインポート.md) |
+| 3 | Phase 2: GBP レビュー取得（OAuth → ratings_daily_snapshot / reviews の MERGE） | 設計書 §12 |
+| 4 | Phase 2: スプレッドシート LATEST / ALERT の更新（アプリから全置換） | 設計書 §12 |
+| 5 | Phase 2.5: performance_daily / monthly 取得＋MERGE、月次 Scheduler | 設計書 §12 |
+| 6 | Phase 3: 並列化・リトライ・構造化ログ | 設計書 §12 |
+| 7 | Phase 4: BQ Extract → GCS（CSV 出力） | 設計書 §12 |
+
+※ Phase 5（CI/CD・Scheduler）はすでに導入済み。
+
+---
+
+## 次にやるべきこと（提案）
+
+- **まだの場合**: **places_provider_map** に **dim_store の全店舗**を INSERT し、**スプレッドシート**を runtime SA に編集者で共有する。
+- **上記の直後**: 既存月次データを入れる場合は、[docs/既存月次データのインポート.md](docs/既存月次データのインポート.md) の手順で `sql/020_import_historical_monthly_performance.sql` を実行（dim_store の全行が対象。店舗追加時は `scripts/gen_020_import_monthly.py` の STORE_IDS を更新して SQL を再生成）。
+- **その次**: **Phase 2** の実装に進む。  
+  - Secret Manager の OAuth は設定済みのため、**GBP API でレビュー取得** → **ratings_daily_snapshot / reviews へ MERGE** → **Sheets の LATEST / ALERT を更新** する処理を `src/main.py`（または別モジュール）に実装する。  
+  - 設計書 §12 の Phase 2 → Phase 2.5 の順で進めると、レビュー・評価に続いて performance まで一連で扱える。
+
+---
+
+## 次のタスク一覧（優先順）
+
+| 順 | タスク | 内容・参照 |
+|----|--------|------------|
+| **1** | **places_provider_map 登録** | dim_store の全 store_id を store_code として INSERT（provider='google', provider_place_id は GBP の location が分かれば設定）。未実施なら [docs/店舗マスタ参照.md](docs/店舗マスタ参照.md) と設計書 §3.1。 |
+| **2** | **スプレッドシート共有** | 書き込み先シートを **sa-review-observation-run@ikeuchi-data-sync.iam.gserviceaccount.com** に**編集者**で共有。未実施なら infra §11。 |
+| **3** | **Phase 2: GBP レビュー取得** | OAuth で GBP API を呼び、`ratings_daily_snapshot` と `reviews` に MERGE。設計書 §12 Step 6–7。 |
+| **4** | **Phase 2: Sheets 更新** | アプリから LATEST / ALERT タブを VIEW に基づき全置換。設計書 §12。 |
+| **5** | **Phase 2.5: performance API** | performance_daily / monthly を GBP API で取得し MERGE。月次は毎月1日 09:00 JST の Scheduler と連携。設計書 §12 Step 8–9。 |
+| **6** | **Phase 3: 安定化** | 並列化・リトライ・構造化ログ。設計書 §12 Step 10。 |
+| **7** | **Phase 4: CSV 出力** | BQ Extract → GCS。設計書 §12 Step 11。 |
+
+※ 既存月次データの xlsx からの upsert は実施済み（`scripts/import_gbp_monthly_from_xlsx.py`）。再投入時は同スクリプトを再実行可。
 
 ---
 

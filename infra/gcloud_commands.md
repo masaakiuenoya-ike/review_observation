@@ -107,21 +107,49 @@ gcloud secrets create gbp-oauth-json \
   --replication-policy="automatic"
 ```
 
-#### 5.1.2 Secret の値登録（JSON）
-ファイルを用意（例: `gbp_oauth.json`）:
+#### 5.1.2 Secret の値登録（JSON）※未登録の場合はここを実施
 
-```json
-{
-  "client_id": "...",
-  "client_secret": "...",
-  "refresh_token": "..."
-}
+**1. GBP 用 OAuth 2.0 の取得**
+
+**1a. Google Cloud Console で OAuth 2.0 クライアント ID を作成**
+
+1. [Google Cloud Console](https://console.cloud.google.com/) にログインし、プロジェクト **ikeuchi-data-sync**（または GBP API を有効化したプロジェクト）を選択する。
+2. 左メニュー **「API とサービス」** → **「認証情報」** を開く。
+3. **「+ 認証情報を作成」** → **「OAuth クライアント ID」** を選ぶ。
+4. 初回の場合は **「OAuth 同意画面」** を先に設定するよう促される。
+   - ユーザータイプ: **内部** の場合は、同じ Google Workspace 組織のユーザーのみが認証可能。**外部** の場合は一般公開前に「テスト」公開にし、テストユーザを指定する。
+   - アプリ名・ユーザーサポートメールを入力して保存する。
+   - **スコープ** で **「スコープを追加または削除」** → `https://www.googleapis.com/auth/business.manage` を追加して保存する。
+   - **ユーザータイプが「外部」の場合のみ**：「OAuth 同意画面」の画面で **「テストユーザ」** セクションがあり、ここに **「+ ADD USERS」** で、GBP を管理する Google アカウントのメールアドレスを追加する。認証できるのはこの一覧に載っているユーザのみ（本番公開前）。
+   - **ユーザータイプが「内部」の場合**：テストユーザの設定はない。組織内のユーザーがそのまま認証できるため、GBP を管理するアカウントでログインした状態で後述の認証フロー（Playground 等）を実行すればよい。
+5. 再度 **「認証情報」** → **「+ 認証情報を作成」** → **「OAuth クライアント ID」**。
+6. アプリケーションの種類: **「デスクトップアプリ」** を選ぶ（ローカルで認証フローを回して refresh_token を取得しやすい）。  
+   または **「ウェブアプリケーション」** の場合は「承認済みのリダイレクト URI」を 1 つ登録する（例: `http://localhost:8080/`）。
+7. 名前（例: `review_observation_gbp`）を入力して **「作成」**。
+8. 表示された **クライアント ID** と **クライアント シークレット** を控える → これが JSON の `client_id` と `client_secret`。
+
+**1b. refresh_token の取得**
+
+- デスクトップアプリの場合: [OAuth 2.0 Playground](https://developers.google.com/oauthplayground/) や、自作の小さなスクリプトで認証フローを実行し、認証後に返ってくる **refresh_token** を控える。Playground では「Step 1」でスコープに `https://www.googleapis.com/auth/business.manage` を追加し、「Step 2」で認証して refresh token を取得する。
+- 取得する 3 要素: `client_id`, `client_secret`, `refresh_token`。
+
+**2. ローカルに JSON ファイルを作成（リポジトリにコミットしない）**
+
+リポジトリの `infra/gbp_oauth.json.example` をコピーして `gbp_oauth.json` を作成し、実値で埋める。
+
+```bash
+cp infra/gbp_oauth.json.example gbp_oauth.json
+# エディタで client_id / client_secret / refresh_token を実値に置き換える
 ```
 
-登録:
+**3. Secret Manager に登録**
+
 ```bash
+gcloud config set project ikeuchi-data-sync
 gcloud secrets versions add gbp-oauth-json --data-file=gbp_oauth.json
 ```
+
+登録後は `gbp_oauth.json` を削除するか、少なくともリポジトリにコミットしないこと（`.gitignore` で `*.json` を除外済み）。
 
 #### 5.1.3 Cloud Run実行SAに Secret Accessor
 ```bash
@@ -317,6 +345,17 @@ gcloud scheduler jobs create http review-observation-monthly \
 - 対象スプレッドシートを Cloud Run 実行SA（`sa-review-observation-run@...`）に **編集者**として共有する。
 - デプロイ時に **SHEET_ID**（スプレッドシートの ID）を Cloud Run の環境変数に渡す。GitHub Actions では Secret `SHEET_ID` を登録し、deploy.yml が `--set-env-vars` で注入する。スプレッドシートの URL が `https://docs.google.com/spreadsheets/d/<SHEET_ID>/edit` のとき、`<SHEET_ID>` をそのまま使う。
 
+### 11.1 実施手順（スプレッドシートを runtime SA に共有）
+
+1. 書き込み先にする Google スプレッドシートを開く（LATEST / ALERT タブをアプリが更新する想定）。
+2. 右上の **「共有」** をクリック。
+3. **ユーザーやグループを追加** の欄に、次のメールアドレスを入力する（コピー＆ペースト可）:
+   ```
+   sa-review-observation-run@ikeuchi-data-sync.iam.gserviceaccount.com
+   ```
+4. 権限を **編集者** にし、**送信**（または共有）をクリック。
+5. （任意）GitHub Secrets に **SHEET_ID** が未登録なら、スプレッドシート URL の `https://docs.google.com/spreadsheets/d/` と `/edit` のあいだの文字列をコピーし、Settings → Secrets and variables → Actions で `SHEET_ID` として登録する。
+
 ---
 
 ## 12. デプロイ用SA（GitHub Actions WIF用）の作成と権限
@@ -475,5 +514,16 @@ GCP がまだの状態で main に push すると、deploy ジョブで Secrets 
 ## 14. （参考）旧「GitHub Actions WIF メモ」
 
 deploy.yml および §12・§13 に統合済み。参照する場合は §12（デプロイ用SA権限）と §13（WIF 設定）を参照。
+
+---
+
+## 15. 既存月次データのインポート（参考）
+
+**dim_store に存在する全店舗**を対象に、月次既存集計を **performance_monthly_snapshot** に投入する手順は以下を参照。
+
+- **手順・タイミング・列対応**: [docs/既存月次データのインポート.md](../docs/既存月次データのインポート.md)
+- **INSERT 用 SQL テンプレート**: [sql/020_import_historical_monthly_performance.sql](../sql/020_import_historical_monthly_performance.sql)
+
+**実施タイミング**: places_provider_map に該当店舗を登録した直後。**store_code** は店舗マスタ `ikeuchi-ga4.stg_freee_prd.dim_store` の **store_id** を文字列にした値（[docs/店舗マスタ参照.md](../docs/店舗マスタ参照.md) 参照）。
 
 ---

@@ -299,27 +299,28 @@ Deploy:
 
 Phase 1（基盤）:
 1. SQL適用（テーブル/VIEW）
-2. places_provider_map 手動INSERT（1店舗）
-3. Cloud Run最小実装（ダミーMERGE → Sheets更新）
-4. GET /health
+2. places_provider_map 手動INSERT（1店舗以上）
+3. （任意）既存月次データのインポート … places_provider_map 登録直後に performance_monthly_snapshot へ投入。README / docs/既存月次データのインポート.md を参照。
+4. Cloud Run最小実装（ダミーMERGE → Sheets更新）
+5. GET /health
 
 Phase 2（GBP連携）:
-5. Secret Manager（OAuth JSON）
-6. GBPレビュー取得（ratings/reviews）
+6. Secret Manager（OAuth JSON）
+7. GBPレビュー取得（ratings/reviews）
 
 Phase 2.5（performance追加）:
-7. performance_daily / monthly 取得＋MERGE
-8. 月次Scheduler（毎月1日09:00 JST）
+8. performance_daily / monthly 取得＋MERGE
+9. 月次Scheduler（毎月1日09:00 JST）
 
 Phase 3（安定化）:
-9. 並列化 / リトライ / 構造化ログ
+10. 並列化 / リトライ / 構造化ログ
 
 Phase 4（CSV）:
-10. BQ Extract → GCS
+11. BQ Extract → GCS
 
 Phase 5（CI/CD）:
-11. ci.yml / deploy.yml
-12. Scheduler（OIDC）
+12. ci.yml / deploy.yml
+13. Scheduler（OIDC）
 
 ---
 

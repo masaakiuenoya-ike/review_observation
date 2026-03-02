@@ -22,3 +22,4 @@ Thumbs.db
 # Local / secrets
 *.json
 !pyproject.toml
+!infra/gbp_oauth.json.example

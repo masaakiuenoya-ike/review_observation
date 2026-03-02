@@ -3,3 +3,7 @@ flask>=3.0.0
 gunicorn>=21.0.0
 ruff>=0.1.0
 pytest>=7.0.0
+# Phase 2: GBP API / BQ
+google-cloud-bigquery>=3.0.0
+google-cloud-secret-manager>=2.0.0
+requests>=2.28.0
