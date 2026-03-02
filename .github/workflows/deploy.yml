@@ -1,0 +1,166 @@
+# main への push で Docker ビルド → Artifact Registry push → Cloud Run デプロイを自動化する。
+# 認証: Workload Identity Federation（WIF）のみ。鍵 JSON は使用しない。
+#
+# 必要な GitHub Secrets（リポジトリ）:
+#   GCP_WIF_PROVIDER        - WIF プロバイダ（例: projects/957418534824/locations/global/workloadIdentityPools/<POOL>/providers/<PROVIDER>）
+#   GCP_WIF_SERVICE_ACCOUNT - デプロイ用 SA（例: sa-review-observation-deploy@ikeuchi-data-sync.iam.gserviceaccount.com）
+#   GCS_EXPORT_BUCKET       - CSV 出力用 GCS バケット名（Cloud Run の環境変数に渡す）
+#   SHEET_ID                - 書き込み先 Google スプレッドシートの ID（Cloud Run の環境変数に渡す）
+# 任意: GCP_PROJECT_ID（未設定時は ikeuchi-data-sync を使用）
+
+name: Deploy to Cloud Run
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  GCP_PROJECT_ID: ikeuchi-data-sync
+  REGION: asia-northeast1
+  SERVICE_NAME: review-observation
+  AR_REPOSITORY: containers
+  RUNTIME_SA: sa-review-observation-run@ikeuchi-data-sync.iam.gserviceaccount.com
+
+jobs:
+  lint-test:
+    name: Lint and Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run ruff
+        run: ruff check .
+
+      - name: Run ruff format check
+        run: ruff format --check .
+
+      - name: Run pytest
+        run: pytest tests -v
+
+  build-push:
+    name: Build and Push Image
+    runs-on: ubuntu-latest
+    needs: lint-test
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      image_uri: ${{ steps.image-uri.outputs.image_uri }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud (WIF)
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID || env.GCP_PROJECT_ID }}
+
+      - name: Configure Docker for Artifact Registry
+        run: |
+          gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push image (with cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID || env.GCP_PROJECT_ID }}/${{ env.AR_REPOSITORY }}/${{ env.SERVICE_NAME }}:${{ github.sha }}
+            ${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID || env.GCP_PROJECT_ID }}/${{ env.AR_REPOSITORY }}/${{ env.SERVICE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+        env:
+          DOCKER_BUILDKIT: 1
+
+      - name: Set image URI output
+        id: image-uri
+        run: |
+          PROJECT="${{ secrets.GCP_PROJECT_ID || env.GCP_PROJECT_ID }}"
+          IMAGE="${{ env.REGION }}-docker.pkg.dev/${PROJECT}/${{ env.AR_REPOSITORY }}/${{ env.SERVICE_NAME }}:${{ github.sha }}"
+          echo "image_uri=$IMAGE" >> $GITHUB_OUTPUT
+
+  deploy:
+    name: Deploy to Cloud Run
+    runs-on: ubuntu-latest
+    needs: build-push
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Authenticate to Google Cloud (WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID || env.GCP_PROJECT_ID }}
+
+      - name: Deploy to Cloud Run
+        id: deploy
+        run: |
+          set -e
+          IMAGE_URI="${{ needs.build-push.outputs.image_uri }}"
+          if [ -z "$IMAGE_URI" ]; then
+            IMAGE_URI="${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID || env.GCP_PROJECT_ID }}/${{ env.AR_REPOSITORY }}/${{ env.SERVICE_NAME }}:${{ github.sha }}"
+          fi
+          gcloud run deploy ${{ env.SERVICE_NAME }} \
+            --image="$IMAGE_URI" \
+            --region=${{ env.REGION }} \
+            --platform=managed \
+            --service-account=${{ env.RUNTIME_SA }} \
+            --no-allow-unauthenticated \
+            --set-env-vars="TZ=Asia/Tokyo,BQ_PROJECT=ikeuchi-ga4,BQ_DATASET=mart_gbp,BQ_LOCATION=${{ env.REGION }},GBP_OAUTH_SECRET_NAME=gbp-oauth-json,SHEET_ID=${{ secrets.SHEET_ID }},SHEET_TAB_LATEST=LATEST,SHEET_TAB_ALERT=ALERT,PROVIDER=google,ALERT_LOW_RATING=4.2,ALERT_DROP_RATING=-0.2,ALERT_SURGE_REVIEWS=10,MAX_WORKERS=5,GCS_EXPORT_BUCKET=${{ secrets.GCS_EXPORT_BUCKET }}" \
+            --quiet
+          echo "Deploy step completed"
+
+      - name: Get Cloud Run URL
+        id: url
+        run: |
+          URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} --region=${{ env.REGION }} --format='value(status.url)')
+          echo "service_url=$URL" >> $GITHUB_OUTPUT
+          echo "Service URL: $URL"
+
+      - name: Health check (GET /health)
+        run: |
+          set -e
+          URL="${{ steps.url.outputs.service_url }}/health"
+          AUDIENCE="${{ steps.url.outputs.service_url }}"
+          echo "Checking $URL (audience=$AUDIENCE)"
+          TOKEN=$(gcloud auth print-identity-token --audiences="${AUDIENCE}")
+          for i in 1 2 3 4 5; do
+            if curl -sf -H "Authorization: Bearer $TOKEN" "$URL"; then
+              echo "Health check OK (200)"
+              exit 0
+            fi
+            echo "Attempt $i failed, retrying in 10s..."
+            sleep 10
+          done
+          echo "Health check failed"
+          exit 1

@@ -1,0 +1,5 @@
+# review_observation (最小構成: デプロイ・ヘルスチェック用)
+flask>=3.0.0
+gunicorn>=21.0.0
+ruff>=0.1.0
+pytest>=7.0.0
