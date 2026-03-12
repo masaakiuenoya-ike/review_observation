@@ -43,7 +43,8 @@ def load_places_provider_map(
             ]
         ),
     )
-    return [dict(row) for row in job.result()]
+    # 最大120秒でタイムアウト（ハング防止）
+    return [dict(row) for row in job.result(timeout=120)]
 
 
 def merge_ratings_daily_snapshot(
@@ -108,7 +109,7 @@ def merge_ratings_daily_snapshot(
                 ]
             ),
         )
-        job.result()
+        job.result(timeout=60)
 
 
 def merge_reviews(
@@ -125,10 +126,16 @@ def merge_reviews(
     ds = config.BQ_DATASET
     table = f"{config.BQ_PROJECT}.{ds}.reviews"
     # 簡易: 1 件ずつ MERGE（大量の場合は UNNEST で一括推奨）
+    total = len([r for r in reviews if r.get("provider_review_id")])
+    if total > 10:
+        import sys
+        print(f"[bq_ops] merge_reviews store={store_code} merging {total} reviews...", file=sys.stderr)
+    merged = 0
     for rev in reviews:
         rid = rev.get("provider_review_id") or ""
         if not rid:
             continue
+        merged += 1
         sql = f"""
         MERGE `{table}` AS T
         USING (SELECT
@@ -183,4 +190,15 @@ def merge_reviews(
             bigquery.ScalarQueryParameter("ingest_run_id", "STRING", ingest_run_id),
         ]
         job = client.query(sql, job_config=bigquery.QueryJobConfig(query_parameters=params))
-        job.result()
+        try:
+            job.result(timeout=30)
+        except Exception as e:
+            import sys
+            print(
+                f"[bq_ops] merge_reviews store={store_code} review {merged}/{total} failed: {e}",
+                file=sys.stderr,
+            )
+            raise
+        if total > 10 and merged % 10 == 0:
+            import sys
+            print(f"[bq_ops] merge_reviews store={store_code} progress {merged}/{total}", file=sys.stderr)

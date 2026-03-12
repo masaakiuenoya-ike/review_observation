@@ -102,7 +102,7 @@ python -m venv venv
 source venv/bin/activate   # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 export PORT=8080
-python src/main.py
+python -m src.main
 # GET http://localhost:8080/health
 ```
 

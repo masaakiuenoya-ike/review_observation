@@ -213,6 +213,32 @@ bq query --project_id=ikeuchi-ga4 --location=asia-northeast1 --use_legacy_sql=fa
 
 ---
 
+## 7.5 BigQuery（ikeuchi-ga4）: ジョブ確認（CLI）
+
+> コンソールの「運用の健全性」で権限不足のときは、CLI でジョブ一覧・状態を確認する。
+
+```bash
+# 直近のジョブ一覧（全ユーザー・プロジェクト指定）
+bq ls -j -a --project_id=ikeuchi-ga4 --max_results=20
+
+# 直近のジョブ一覧（自分のジョブのみ）
+bq ls -j --project_id=ikeuchi-ga4 --max_results=20
+```
+
+出力例: `jobId`, `jobType`, `state` (RUNNING / DONE / PENDING), `creationTime`, `startTime`, `endTime` など。
+
+```bash
+# 特定ジョブの詳細（RUNNING で止まっていないか確認）
+bq show -j --project_id=ikeuchi-ga4 JOB_ID
+
+# JSON で詳細（クエリ文・エラーなど）
+bq show --format=prettyjson -j --project_id=ikeuchi-ga4 JOB_ID
+```
+
+**補足**: `merge_reviews` はレビュー1件ごとに MERGE を投げるため、1店舗で多数のレビューがあるとジョブが連続する。`state=RUNNING` のジョブが長時間残っていれば、アプリが `job.result(timeout=60)` で待っている可能性がある。
+
+---
+
 ## 8. Artifact Registry（ikeuchi-data-sync）: 作成
 
 > Cloud Run デプロイ用のコンテナレジストリ。
@@ -306,10 +332,42 @@ gcloud run services add-iam-policy-binding "${SERVICE_NAME}" \
   --role="roles/run.invoker"
 ```
 
-### 10.2 日次ジョブ（毎日 09:00 JST）
+### 10.2 デプロイ（Cloud Run）
+
+- **main に push** すると GitHub Actions でビルド・デプロイが走る（`.github/workflows/deploy.yml`）。
+- 手動実行: GitHub の Actions タブで「Deploy to Cloud Run」を **Run workflow**。
+- 初回または Scheduler 用 SA 作成後は **10.1** の `run.invoker` 付与を実行する。
+
+### 10.3 1時間ごとジョブ（推奨: レビュー取得）
+
+毎時 0 分（JST）に `POST /` を実行するジョブ。**Cloud Run デプロイ後に** 実行する。
+
 ```bash
+export REGION="asia-northeast1"
+export SERVICE_NAME="review-observation"
+export SCHEDULER_SA="sa-review-obs-scheduler@ikeuchi-data-sync.iam.gserviceaccount.com"
 export RUN_URL="$(gcloud run services describe "${SERVICE_NAME}" --region="${REGION}" --format="value(status.url)")"
 
+gcloud scheduler jobs create http review-observation-hourly \
+  --location="${REGION}" \
+  --schedule="0 * * * *" \
+  --time-zone="Asia/Tokyo" \
+  --uri="${RUN_URL}/" \
+  --http-method=POST \
+  --oidc-service-account-email="${SCHEDULER_SA}" \
+  --oidc-token-audience="${RUN_URL}" \
+  --headers="Content-Type=application/json" \
+  --message-body="{}"
+```
+
+- `0 * * * *` = 毎時 0 分（1日 24 回）。
+- 既に同名ジョブがある場合は `gcloud scheduler jobs delete review-observation-hourly --location=${REGION}` で削除してから再作成。
+
+### 10.4 日次ジョブ（毎日 09:00 JST・任意）
+
+1時間ごとで十分な場合は不要。日次だけにしたい場合は 10.3 の代わりにこちらを使用。
+
+```bash
 gcloud scheduler jobs create http review-observation-daily \
   --location="${REGION}" \
   --schedule="0 9 * * *" \
@@ -322,7 +380,7 @@ gcloud scheduler jobs create http review-observation-daily \
   --message-body="{}"
 ```
 
-### 10.3 月次ジョブ（毎月1日 09:00 JST）
+### 10.5 月次ジョブ（毎月1日 09:00 JST）
 ```bash
 gcloud scheduler jobs create http review-observation-monthly \
   --location="${REGION}" \
@@ -337,6 +395,14 @@ gcloud scheduler jobs create http review-observation-monthly \
 ```
 
 > 実装側で `run_monthly: true` を見て monthly を実行する、または別エンドポイントに分けてもOK。
+
+### 10.6 ジョブ一覧・手動実行
+
+```bash
+gcloud scheduler jobs list --location=asia-northeast1
+# 手動で 1 回実行
+gcloud scheduler jobs run review-observation-hourly --location=asia-northeast1
+```
 
 ---
 

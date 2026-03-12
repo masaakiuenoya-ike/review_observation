@@ -15,3 +15,8 @@ GBP_OAUTH_SECRET_NAME = os.environ.get(
 
 # GCP プロジェクト（Secret Manager / Cloud Run はこちら）
 GCP_PROJECT = os.environ.get("GCP_PROJECT_ID", "ikeuchi-data-sync")
+
+# Google Sheets（未設定なら Sheets 更新はスキップ）
+SHEET_ID = (os.environ.get("SHEET_ID") or "").strip()
+SHEET_TAB_LATEST = os.environ.get("SHEET_TAB_LATEST", "LATEST")
+SHEET_TAB_ALERT = os.environ.get("SHEET_TAB_ALERT", "ALERT")
