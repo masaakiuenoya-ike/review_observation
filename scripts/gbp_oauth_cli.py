@@ -26,6 +26,7 @@ GBP 用 OAuth を CLI で扱う統合スクリプト。
   # access_token だけ欲しい場合
   python3 scripts/gbp_oauth_cli.py get-access-token
 """
+
 from __future__ import annotations
 
 import argparse
@@ -49,9 +50,7 @@ def _env(name: str) -> str:
     return (os.environ.get(name) or "").strip()
 
 
-def _get_access_token_from_refresh(
-    client_id: str, client_secret: str, refresh_token: str
-) -> str:
+def _get_access_token_from_refresh(client_id: str, client_secret: str, refresh_token: str) -> str:
     r = requests.post(
         TOKEN_URL,
         data={
@@ -208,6 +207,7 @@ def cmd_fetch_locations(extra_args: list[str]) -> int:
 def cmd_request_quota_access() -> int:
     """クォータ申請フォームを開き、プロジェクト番号などを表示する。"""
     import webbrowser
+
     form_url = "https://support.google.com/business/contact/api_default"
     project_number = "957418534824"
     print("GBP API のクォータが 0 の場合、Basic API Access を申請してください。")
@@ -232,7 +232,12 @@ def main() -> int:
     )
     parser.add_argument(
         "command",
-        choices=["get-refresh-token", "get-access-token", "fetch-locations", "request-quota-access"],
+        choices=[
+            "get-refresh-token",
+            "get-access-token",
+            "fetch-locations",
+            "request-quota-access",
+        ],
         help="get-refresh-token, get-access-token, fetch-locations, request-quota-access",
     )
     args, extra = parser.parse_known_args()

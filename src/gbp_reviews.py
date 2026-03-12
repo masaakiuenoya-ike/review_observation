@@ -3,6 +3,7 @@ GBP API (My Business v4) で reviews.list を呼ぶ。
 GET https://mybusiness.googleapis.com/v4/{parent}/reviews
 ※ reviews は v4 のみ（v1 に代替なし）。requests の timeout は DNS に効かないためスレッドでラップ。
 """
+
 from __future__ import annotations
 
 import socket
@@ -82,9 +83,7 @@ def fetch_reviews_for_location(
 
         def _do_get() -> None:
             try:
-                result_holder[0] = requests.get(
-                    url, headers=headers, params=params, timeout=(4, 6)
-                )
+                result_holder[0] = requests.get(url, headers=headers, params=params, timeout=(4, 6))
             except BaseException as e:
                 exc_holder[0] = e
 
@@ -96,9 +95,7 @@ def fetch_reviews_for_location(
                 f"[gbp_reviews] 応答が {_REQUEST_TIMEOUT_SEC}s 以内に返りませんでした",
                 file=sys.stderr,
             )
-            raise TimeoutError(
-                f"GET {url[:60]}... did not complete in {_REQUEST_TIMEOUT_SEC}s"
-            )
+            raise TimeoutError(f"GET {url[:60]}... did not complete in {_REQUEST_TIMEOUT_SEC}s")
         if exc_holder[0]:
             if isinstance(exc_holder[0], requests.exceptions.Timeout):
                 print(f"[gbp_reviews] Timeout: {exc_holder[0]}", file=sys.stderr)

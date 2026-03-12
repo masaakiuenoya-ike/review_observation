@@ -3,10 +3,10 @@
 GBP API で accounts と locations を取得し、
 locationName と dim_store を突き合わせて places_provider_map の provider_place_id を UPDATE する。
 """
+
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 from pathlib import Path
 
@@ -100,6 +100,7 @@ def _get_with_retry(
 ) -> requests.Response:
     """429 のとき wait_seconds 待ってリトライする。"""
     import time
+
     r = None
     for attempt in range(max_retries):
         r = requests.get(url, headers=headers, params=params or {}, timeout=30)
@@ -220,12 +221,18 @@ def fetch_locations(access_token: str, account_id: str) -> list[dict]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="GBP locations 取得 → places_provider_map UPDATE")
-    parser.add_argument("--dry-run", action="store_true", help="UPDATE せず一覧と SQL を出力するだけ")
-    parser.add_argument("--no-update", action="store_true", help="UPDATE を実行しない（fetch と SQL 生成のみ）")
-    parser.add_argument("--access-token", type=str, help="既に取得した ACCESS_TOKEN（未指定時は Secret Manager から取得）")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="UPDATE せず一覧と SQL を出力するだけ"
+    )
+    parser.add_argument(
+        "--no-update", action="store_true", help="UPDATE を実行しない（fetch と SQL 生成のみ）"
+    )
+    parser.add_argument(
+        "--access-token",
+        type=str,
+        help="既に取得した ACCESS_TOKEN（未指定時は Secret Manager から取得）",
+    )
     args = parser.parse_args()
-
-    import os
 
     if args.access_token:
         token = args.access_token.strip()
@@ -253,7 +260,10 @@ def main() -> int:
             all_locations.extend(locs)
         except requests.exceptions.HTTPError as e:
             if e.response is not None and e.response.status_code == 404:
-                print(f"  Account {aid}: 404 (locations なしまたは別 API のアカウントのためスキップ)", file=sys.stderr)
+                print(
+                    f"  Account {aid}: 404 (locations なしまたは別 API のアカウントのためスキップ)",
+                    file=sys.stderr,
+                )
                 continue
             raise
 

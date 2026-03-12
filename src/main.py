@@ -104,7 +104,9 @@ def run_ingest():
         provider_place_id = (place.get("provider_place_id") or "").strip()
         if not provider_place_id:
             continue
-        print(f"[review_observation] place {i}/{len(places)} store_code={store_code}...", flush=True)
+        print(
+            f"[review_observation] place {i}/{len(places)} store_code={store_code}...", flush=True
+        )
         try:
             _fetch_and_merge(
                 access_token=access_token,
@@ -116,7 +118,11 @@ def run_ingest():
             )
         except requests.exceptions.HTTPError as e:
             if e.response is not None and e.response.status_code == 401:
-                print("[review_observation] 401 (token expired?), refreshing access_token and retrying once...", flush=True, file=sys.stderr)
+                print(
+                    "[review_observation] 401 (token expired?), refreshing access_token and retrying once...",
+                    flush=True,
+                    file=sys.stderr,
+                )
                 try:
                     access_token = gbp_oauth.get_gbp_access_token(
                         config.GBP_OAUTH_SECRET_NAME, config.GCP_PROJECT
@@ -133,7 +139,11 @@ def run_ingest():
                     errors += 1
                     if errors == 1:
                         import traceback
-                        print(f"[review_observation] 店舗 {store_code} リトライ後もエラー: {retry_e}", file=sys.stderr)
+
+                        print(
+                            f"[review_observation] 店舗 {store_code} リトライ後もエラー: {retry_e}",
+                            file=sys.stderr,
+                        )
                         traceback.print_exc(file=sys.stderr)
                     rating_rows.append(
                         {
@@ -150,7 +160,11 @@ def run_ingest():
                 errors += 1
                 if errors == 1:
                     import traceback
-                    print(f"[review_observation] 店舗 {store_code} でエラー（代表）: {e}", file=sys.stderr)
+
+                    print(
+                        f"[review_observation] 店舗 {store_code} でエラー（代表）: {e}",
+                        file=sys.stderr,
+                    )
                     traceback.print_exc(file=sys.stderr)
                 rating_rows.append(
                     {
@@ -168,7 +182,10 @@ def run_ingest():
             # デバッグ用: 先頭1件だけ stderr に出力（同じエラーが31件続くため）
             if errors == 1:
                 import traceback
-                print(f"[review_observation] 店舗 {store_code} でエラー（代表）: {e}", file=sys.stderr)
+
+                print(
+                    f"[review_observation] 店舗 {store_code} でエラー（代表）: {e}", file=sys.stderr
+                )
                 traceback.print_exc(file=sys.stderr)
             rating_rows.append(
                 {

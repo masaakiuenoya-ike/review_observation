@@ -129,7 +129,10 @@ def merge_reviews(
     total = len([r for r in reviews if r.get("provider_review_id")])
     if total > 10:
         import sys
-        print(f"[bq_ops] merge_reviews store={store_code} merging {total} reviews...", file=sys.stderr)
+
+        print(
+            f"[bq_ops] merge_reviews store={store_code} merging {total} reviews...", file=sys.stderr
+        )
     merged = 0
     for rev in reviews:
         rid = rev.get("provider_review_id") or ""
@@ -194,6 +197,7 @@ def merge_reviews(
             job.result(timeout=30)
         except Exception as e:
             import sys
+
             print(
                 f"[bq_ops] merge_reviews store={store_code} review {merged}/{total} failed: {e}",
                 file=sys.stderr,
@@ -201,4 +205,8 @@ def merge_reviews(
             raise
         if total > 10 and merged % 10 == 0:
             import sys
-            print(f"[bq_ops] merge_reviews store={store_code} progress {merged}/{total}", file=sys.stderr)
+
+            print(
+                f"[bq_ops] merge_reviews store={store_code} progress {merged}/{total}",
+                file=sys.stderr,
+            )
