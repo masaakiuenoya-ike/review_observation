@@ -132,28 +132,20 @@ jobs:
           IMAGE_URI="${{ needs.build-push.outputs.image_uri }}"
           if [ -z "$IMAGE_URI" ]; then
             IMAGE_URI="${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID || env.GCP_PROJECT_ID }}/${{ env.AR_REPOSITORY }}/${{ env.SERVICE_NAME }}:${{ github.sha }}"
+            echo "Using fallback IMAGE_URI (image_uri output was empty)"
           fi
           echo "Deploying image (sha): ${{ github.sha }}"
+          EXTRA_ENV=""
+          [ -n "${SHEET_ID}" ] && EXTRA_ENV="${EXTRA_ENV} --set-env-vars=SHEET_ID=${SHEET_ID}"
+          [ -n "${GCS_EXPORT_BUCKET}" ] && EXTRA_ENV="${EXTRA_ENV} --set-env-vars=GCS_EXPORT_BUCKET=${GCS_EXPORT_BUCKET}"
           gcloud run deploy ${{ env.SERVICE_NAME }} \
             --image="$IMAGE_URI" \
             --region=${{ env.REGION }} \
             --platform=managed \
             --service-account=${{ env.RUNTIME_SA }} \
             --no-allow-unauthenticated \
-            --set-env-vars="TZ=Asia/Tokyo" \
-            --set-env-vars="BQ_PROJECT=ikeuchi-ga4" \
-            --set-env-vars="BQ_DATASET=mart_gbp" \
-            --set-env-vars="BQ_LOCATION=${{ env.REGION }}" \
-            --set-env-vars="GBP_OAUTH_SECRET_NAME=gbp-oauth-json" \
-            --set-env-vars="SHEET_ID=${SHEET_ID}" \
-            --set-env-vars="SHEET_TAB_LATEST=LATEST" \
-            --set-env-vars="SHEET_TAB_ALERT=ALERT" \
-            --set-env-vars="PROVIDER=google" \
-            --set-env-vars="ALERT_LOW_RATING=4.2" \
-            --set-env-vars="ALERT_DROP_RATING=-0.2" \
-            --set-env-vars="ALERT_SURGE_REVIEWS=10" \
-            --set-env-vars="MAX_WORKERS=5" \
-            --set-env-vars="GCS_EXPORT_BUCKET=${GCS_EXPORT_BUCKET}"
+            --set-env-vars="TZ=Asia/Tokyo,BQ_PROJECT=ikeuchi-ga4,BQ_DATASET=mart_gbp,BQ_LOCATION=${{ env.REGION }},GBP_OAUTH_SECRET_NAME=gbp-oauth-json,SHEET_TAB_LATEST=LATEST,SHEET_TAB_ALERT=ALERT,PROVIDER=google,ALERT_LOW_RATING=4.2,ALERT_DROP_RATING=-0.2,ALERT_SURGE_REVIEWS=10,MAX_WORKERS=5" \
+            $EXTRA_ENV
           echo "Deploy step completed"
 
       - name: Get Cloud Run URL
