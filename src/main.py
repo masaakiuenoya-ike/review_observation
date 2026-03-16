@@ -338,11 +338,12 @@ def run_ingest():
 
             traceback.print_exc(file=sys.stderr)
 
-    if config.SLACK_WEBHOOK_URL:
-        try:
-            slack_notify.send_slack_notification(snapshot_date.isoformat(), star_counts_per_store)
-        except Exception as e:
-            print(f"[review_observation] Slack notification failed: {e}", file=sys.stderr)
+    # Slack 通知は 1 日 1 回のみ（POST /daily-summary の daily-slack で送る）。取込完了時は送らない。
+    # if config.SLACK_WEBHOOK_URL:
+    #     try:
+    #         slack_notify.send_slack_notification(snapshot_date.isoformat(), star_counts_per_store)
+    #     except Exception as e:
+    #         print(f"[review_observation] Slack notification failed: {e}", file=sys.stderr)
 
     return jsonify(
         {

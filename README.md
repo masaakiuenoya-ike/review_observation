@@ -38,10 +38,12 @@ Google Business Profile（GBP）のレビュー・評価を定点観測し、Big
 
 | ジョブ名 | スケジュール | 呼び出し先 | 説明 |
 |----------|--------------|------------|------|
-| **review-observation-hourly** | 毎時 0 分 | POST / | 取込（レビュー取得＋BQ MERGE＋Sheets 更新）。 |
-| **review-observation-daily** | 毎日 09:00 | POST / | 同上（日次で 1 回実行したい場合用）。 |
+| **review-observation-hourly** | 毎時 0 分 | POST / | 取込（レビュー取得＋BQ MERGE＋Sheets 更新）。**Slack は送らない**。 |
+| **review-observation-daily** | 毎日 09:00 | POST / | 同上。**Slack は送らない**。 |
 | **review-observation-sheets-update** | **毎日 09:10** | POST /sheets-update | 1日1回、取込なしでシートだけ更新。 |
-| **review-observation-daily-slack** | **毎日 09:15** | POST /daily-summary | シート更新の 5 分後に各店舗の評価・前日比を Slack に送る。 |
+| **review-observation-daily-slack** | **毎日 09:15** | POST /daily-summary | **Slack 通知はここだけ 1 日 1 回**。各店舗の評価・前日比を送る。 |
+
+詳細は [docs/Slack通知の設定.md](docs/Slack通知の設定.md) を参照。
 
 ### スプレッドシート（方式 A: アプリが書き込む場合）
 
