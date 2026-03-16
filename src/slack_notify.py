@@ -12,6 +12,16 @@ from . import config
 from . import bq_ops
 
 
+def _round1(val: Any) -> Any:
+    """評価を小数点1桁に（2桁目で四捨五入）。None はそのまま。"""
+    if val is None:
+        return None
+    try:
+        return round(float(val), 1)
+    except (TypeError, ValueError):
+        return val
+
+
 def _fetch_alerts(client: Any) -> list[dict[str, Any]]:
     """v_latest_available_alerts（直近取込日のアラート）を取得。"""
     ds = config.BQ_DATASET
@@ -62,8 +72,8 @@ def _format_slack_blocks(
                 "rating_drop": "★下がった",
                 "review_surge": "レビュー急増",
             }.get(atype, atype)
-            val = r.get("rating_value")
-            delta = r.get("delta_rating")
+            val = _round1(r.get("rating_value"))
+            delta = _round1(r.get("delta_rating"))
             cnt = r.get("delta_review_count")
             lines.append(f"・{store_label}: {label} (評価={val}, Δ={delta}, レビューΔ={cnt})")
     else:
@@ -76,7 +86,7 @@ def _format_slack_blocks(
             store_code = r.get("store_code", "")
             store_name = r.get("store_name") or ""
             store_label = f"{store_name} ({store_code})" if store_name else store_code
-            delta = r.get("delta_rating")
+            delta = _round1(r.get("delta_rating"))
             lines.append(f"・{store_label}: Δ評価 +{delta}")
     else:
         lines.append("\n★が上がった: なし")
@@ -124,25 +134,52 @@ def _fetch_all_ratings_for_daily(client: Any) -> list[dict[str, Any]]:
     return [dict(r) for r in job.result(timeout=120)]
 
 
-def _format_daily_summary_blocks(snapshot_date: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
-    """日次サマリ: 各店舗の評価と前日比を1ブロック（最大3000文字）にまとめる。"""
+def _format_daily_summary_blocks(
+    snapshot_date: str,
+    rows: list[dict[str, Any]],
+    alerts: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """日次サマリ: アラート（任意）と各店舗の評価・前日比を1ブロック（最大3000文字）にまとめる。評価は小数点1桁で四捨五入。"""
     lines = [f"*GBP 日次サマリ*（{snapshot_date}）", ""]
+    # ALERT 情報
+    if alerts:
+        lines.append("*アラート*")
+        for r in alerts:
+            store_name = r.get("store_name") or ""
+            store_code = r.get("store_code", "")
+            label = f"{store_name} ({store_code})" if store_name else store_code
+            atype = r.get("alert_type", "")
+            type_label = {
+                "low_rating": "評価低い(<4.2)",
+                "rating_drop": "★下がった",
+                "review_surge": "レビュー急増",
+            }.get(atype, atype)
+            val = _round1(r.get("rating_value"))
+            delta = _round1(r.get("delta_rating"))
+            cnt = r.get("delta_review_count")
+            lines.append(f"・{label}: {type_label} (評価={val}, Δ={delta}, レビューΔ={cnt})")
+        lines.append("")
+    else:
+        lines.append("*アラート*: なし")
+        lines.append("")
+    # 店舗別評価（小数点1桁）
+    lines.append("*店舗別評価*")
     for r in rows:
         store_name = r.get("store_name") or ""
         store_code = r.get("store_code", "")
         label = f"{store_name} ({store_code})" if store_name else store_code
-        rating = r.get("rating_value")
-        delta = r.get("delta_rating")
+        rating = _round1(r.get("rating_value"))
+        delta = _round1(r.get("delta_rating"))
         rev = r.get("review_count")
         rev_delta = r.get("delta_review_count")
-        delta_str = f" (前日比 {delta:+.2f})" if delta is not None else ""
-        rev_delta = r.get("delta_review_count")
+        delta_str = f" (前日比 {delta:+.1f})" if delta is not None else ""
         rev_str = (
             f", レビュー {rev}件 (Δ{rev_delta})"
             if rev is not None and rev_delta is not None
             else ""
         )
-        lines.append(f"・{label}: 評価 {rating}{delta_str}{rev_str}")
+        rating_display = rating if rating is not None else "-"
+        lines.append(f"・{label}: 評価 {rating_display}{delta_str}{rev_str}")
     text = "\n".join(lines)
     # Slack section は 3000 文字上限。超えたら前半で切る（通常は店舗数で超えない）
     if len(text) > 2900:
@@ -164,7 +201,16 @@ def send_daily_summary() -> None:
     try:
         client = bq_ops.get_client()
         rows = _fetch_all_ratings_for_daily(client)
+        alerts = _fetch_alerts(client)
         if not rows:
+            alert_text = ""
+            if alerts:
+                alert_lines = ["*アラート*"]
+                for r in alerts:
+                    label = f"{r.get('store_name') or ''} ({r.get('store_code')})".strip() or r.get("store_code", "")
+                    type_label = {"low_rating": "評価低い", "rating_drop": "★下がった", "review_surge": "レビュー急増"}.get(r.get("alert_type", ""), r.get("alert_type", ""))
+                    alert_lines.append(f"・{label}: {type_label}")
+                alert_text = "\n".join(alert_lines) + "\n\n"
             payload = {
                 "text": "GBP 日次サマリ（データなし）",
                 "blocks": [
@@ -172,14 +218,14 @@ def send_daily_summary() -> None:
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
-                            "text": "*GBP 日次サマリ*\n直近取込データがありません。",
+                            "text": f"*GBP 日次サマリ*\n{alert_text}直近取込データがありません。",
                         },
                     }
                 ],
             }
         else:
             snapshot_date = str(rows[0].get("snapshot_date", "")) if rows else ""
-            payload = _format_daily_summary_blocks(snapshot_date, rows)
+            payload = _format_daily_summary_blocks(snapshot_date, rows, alerts)
         r = requests.post(config.SLACK_WEBHOOK_URL, json=payload, timeout=10)
         r.raise_for_status()
     except Exception as e:
