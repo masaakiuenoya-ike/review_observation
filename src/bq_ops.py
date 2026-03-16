@@ -59,6 +59,7 @@ def merge_ratings_daily_snapshot(
     ds = config.BQ_DATASET
     table = f"{config.BQ_PROJECT}.{ds}.ratings_daily_snapshot"
     store_codes = [r["store_code"] for r in rows]
+    store_names = [r.get("store_name") or "" for r in rows]
     providers = [r["provider"] for r in rows]
     place_ids = [r.get("provider_place_id") or "" for r in rows]
     rating_values = [r.get("rating_value") for r in rows]
@@ -70,6 +71,7 @@ def merge_ratings_daily_snapshot(
         SELECT
             @snapshot_date AS snapshot_date,
             s.store_code AS store_code,
+            s.store_name AS store_name,
             s.provider AS provider,
             s.provider_place_id AS provider_place_id,
             s.rating_value AS rating_value,
@@ -77,9 +79,10 @@ def merge_ratings_daily_snapshot(
             @ingest_run_id AS ingest_run_id,
             s.status AS status
         FROM (
-            SELECT sc AS store_code, p AS provider, pid AS provider_place_id,
+            SELECT sc AS store_code, sn AS store_name, p AS provider, pid AS provider_place_id,
                    rv AS rating_value, rc AS review_count, st AS status
             FROM UNNEST(@store_codes) AS sc WITH OFFSET o
+            JOIN UNNEST(@store_names) AS sn WITH OFFSET o0 ON o = o0
             JOIN UNNEST(@providers) AS p WITH OFFSET o2 ON o = o2
             JOIN UNNEST(@place_ids) AS pid WITH OFFSET o3 ON o = o3
             JOIN UNNEST(@rating_values) AS rv WITH OFFSET o4 ON o = o4
@@ -89,6 +92,7 @@ def merge_ratings_daily_snapshot(
     ) AS S
     ON T.snapshot_date = S.snapshot_date AND T.store_code = S.store_code AND T.provider = S.provider
     WHEN MATCHED THEN UPDATE SET
+        store_name = S.store_name,
         provider_place_id = S.provider_place_id,
         rating_value = S.rating_value,
         review_count = S.review_count,
@@ -96,10 +100,10 @@ def merge_ratings_daily_snapshot(
         ingest_run_id = S.ingest_run_id,
         status = S.status
     WHEN NOT MATCHED THEN INSERT (
-        snapshot_date, store_code, provider, provider_place_id,
+        snapshot_date, store_code, store_name, provider, provider_place_id,
         rating_value, review_count, fetched_at, ingest_run_id, status
     ) VALUES (
-        S.snapshot_date, S.store_code, S.provider, S.provider_place_id,
+        S.snapshot_date, S.store_code, S.store_name, S.provider, S.provider_place_id,
         S.rating_value, S.review_count, CURRENT_TIMESTAMP(), S.ingest_run_id, S.status
     )
     """
@@ -108,6 +112,7 @@ def merge_ratings_daily_snapshot(
             bigquery.ScalarQueryParameter("snapshot_date", "DATE", snapshot_date.isoformat()),
             bigquery.ScalarQueryParameter("ingest_run_id", "STRING", ingest_run_id),
             bigquery.ArrayQueryParameter("store_codes", "STRING", store_codes),
+            bigquery.ArrayQueryParameter("store_names", "STRING", store_names),
             bigquery.ArrayQueryParameter("providers", "STRING", providers),
             bigquery.ArrayQueryParameter("place_ids", "STRING", place_ids),
             bigquery.ArrayQueryParameter("rating_values", "FLOAT64", rating_values),
@@ -129,8 +134,9 @@ def merge_reviews(
     provider_place_id: str,
     reviews: list[dict[str, Any]],
     ingest_run_id: str,
+    store_name: str = "",
 ) -> None:
-    """reviews に MERGE（store_code + provider + provider_review_id）。店舗単位で UNNEST 一括 MERGE。"""
+    """reviews に MERGE（store_code + provider + provider_review_id）。store_name も書き込む。"""
     valid = [r for r in reviews if r.get("provider_review_id")]
     if not valid:
         return
@@ -158,6 +164,7 @@ def merge_reviews(
         USING (
             SELECT
                 @store_code AS store_code,
+                @store_name AS store_name,
                 @provider AS provider,
                 @provider_place_id AS provider_place_id,
                 i.rid AS provider_review_id,
@@ -179,6 +186,7 @@ def merge_reviews(
         ) AS S
         ON T.store_code = S.store_code AND T.provider = S.provider AND T.provider_review_id = S.provider_review_id
         WHEN MATCHED THEN UPDATE SET
+            store_name = S.store_name,
             rating = S.rating,
             review_text = S.review_text,
             review_created_at = S.review_created_at,
@@ -187,11 +195,11 @@ def merge_reviews(
             ingested_at = CURRENT_TIMESTAMP(),
             ingest_run_id = S.ingest_run_id
         WHEN NOT MATCHED THEN INSERT (
-            store_code, provider, provider_place_id, provider_review_id,
+            store_code, store_name, provider, provider_place_id, provider_review_id,
             rating, review_text, review_created_at, review_updated_at, reviewer_display_name,
             ingested_at, ingest_run_id
         ) VALUES (
-            S.store_code, S.provider, S.provider_place_id, S.provider_review_id,
+            S.store_code, S.store_name, S.provider, S.provider_place_id, S.provider_review_id,
             S.rating, S.review_text, S.review_created_at, S.review_updated_at, S.reviewer_display_name,
             CURRENT_TIMESTAMP(), S.ingest_run_id
         )
@@ -199,6 +207,7 @@ def merge_reviews(
         job_config = bigquery.QueryJobConfig(
             query_parameters=[
                 bigquery.ScalarQueryParameter("store_code", "STRING", store_code),
+                bigquery.ScalarQueryParameter("store_name", "STRING", store_name),
                 bigquery.ScalarQueryParameter("provider", "STRING", provider),
                 bigquery.ScalarQueryParameter("provider_place_id", "STRING", provider_place_id),
                 bigquery.ScalarQueryParameter("ingest_run_id", "STRING", ingest_run_id),

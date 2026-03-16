@@ -180,3 +180,39 @@ UNION ALL
 SELECT snapshot_date, store_code, store_name, provider, 'rating_drop' AS alert_type, rating_value, delta_rating, delta_review_count FROM base WHERE delta_rating <= -0.2
 UNION ALL
 SELECT snapshot_date, store_code, store_name, provider, 'review_surge' AS alert_type, rating_value, delta_rating, delta_review_count FROM base WHERE delta_review_count >= 10;
+
+-- 5.4 v_ratings_daily_snapshot（テーブルに store_name 列あり。NULL の行は places_provider_map から補う）
+CREATE OR REPLACE VIEW `YOUR_DATASET.v_ratings_daily_snapshot` AS
+SELECT
+  r.snapshot_date,
+  r.store_code,
+  COALESCE(NULLIF(TRIM(r.store_name), ''), p.display_name, '') AS store_name,
+  r.provider,
+  r.provider_place_id,
+  r.rating_value,
+  r.review_count,
+  r.fetched_at,
+  r.ingest_run_id,
+  r.status,
+  r.error_code,
+  r.error_message
+FROM `YOUR_DATASET.ratings_daily_snapshot` r
+LEFT JOIN `YOUR_DATASET.places_provider_map` p ON r.store_code = p.store_code AND r.provider = p.provider;
+
+-- 5.5 v_reviews（テーブルに store_name 列あり。NULL の行は places_provider_map から補う）
+CREATE OR REPLACE VIEW `YOUR_DATASET.v_reviews` AS
+SELECT
+  r.store_code,
+  COALESCE(NULLIF(TRIM(r.store_name), ''), p.display_name, '') AS store_name,
+  r.provider,
+  r.provider_place_id,
+  r.provider_review_id,
+  r.rating,
+  r.review_text,
+  r.review_created_at,
+  r.review_updated_at,
+  r.reviewer_display_name,
+  r.ingested_at,
+  r.ingest_run_id
+FROM `YOUR_DATASET.reviews` r
+LEFT JOIN `YOUR_DATASET.places_provider_map` p ON r.store_code = p.store_code AND r.provider = p.provider;

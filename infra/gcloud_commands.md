@@ -211,6 +211,13 @@ bq query --project_id=ikeuchi-ga4 --location=asia-northeast1 --use_legacy_sql=fa
   "$(sed 's/YOUR_DATASET/mart_gbp/g' sql/002_create_views.sql)"
 ```
 
+### 7.1 store_name 列（テーブル・VIEW）
+
+- **ratings_daily_snapshot** と **reviews** テーブルには **store_name** 列があります。取込（POST /）時に `places_provider_map.display_name` が書き込まれます。
+- 既存テーブルに列を追加する場合は `sql/001b_alter_add_store_name.sql` を YOUR_DATASET → mart_gbp に置換し、1 文ずつ実行（既に列がある場合はエラーになるのでスキップ）。
+- **v_latest_with_delta_ratings** には **store_name** が含まれています。BQ で出ない場合は **002_create_views.sql を mart_gbp で再実行**してください。
+- **v_ratings_daily_snapshot**・**v_reviews** は、テーブルの store_name を優先し、NULL の行は `places_provider_map.display_name` で補います。テーブルを直接見ても store_name 列が表示されます。
+
 ---
 
 ## 7.5 BigQuery（ikeuchi-ga4）: ジョブ確認（CLI）
@@ -548,6 +555,7 @@ bash scripts/report_scheduler_status.sh
 
 ## 11. Sheets 書き込み権限
 
+- **Google Sheets API** をプロジェクト **ikeuchi-data-sync** で有効にする。未有効だと POST /sheets-update や取込後のシート更新で 500（SERVICE_DISABLED）になる。[Sheets API 有効化](https://console.developers.google.com/apis/api/sheets.googleapis.com/overview?project=957418534824) で「有効にする」を実行。
 - 対象スプレッドシートを Cloud Run 実行SA（`sa-review-observation-run@...`）に **編集者**として共有する。
 - デプロイ時に **SHEET_ID**（スプレッドシートの ID）を Cloud Run の環境変数に渡す。GitHub Actions では Secret `SHEET_ID` を登録し、deploy.yml が `--set-env-vars` で注入する。スプレッドシートの URL が `https://docs.google.com/spreadsheets/d/<SHEET_ID>/edit` のとき、`<SHEET_ID>` をそのまま使う。
 

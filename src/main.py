@@ -124,17 +124,20 @@ def run_ingest():
         avg_rating, total_count, reviews = gbp_reviews.fetch_reviews_for_location(
             tok, provider_place_id
         )
+        store_name = place.get("display_name") or ""
         bq_ops.merge_reviews(
             store_code=store_code,
             provider=place["provider"],
             provider_place_id=provider_place_id,
             reviews=reviews,
             ingest_run_id=ingest_run_id,
+            store_name=store_name,
         )
         count_1 = sum(1 for r in reviews if r.get("rating") == 1.0)
         count_5 = sum(1 for r in reviews if r.get("rating") == 5.0)
         rating_row = {
             "store_code": store_code,
+            "store_name": store_name,
             "provider": place["provider"],
             "provider_place_id": provider_place_id,
             "rating_value": avg_rating,
