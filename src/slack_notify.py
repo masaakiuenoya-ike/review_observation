@@ -207,8 +207,14 @@ def send_daily_summary() -> None:
             if alerts:
                 alert_lines = ["*アラート*"]
                 for r in alerts:
-                    label = f"{r.get('store_name') or ''} ({r.get('store_code')})".strip() or r.get("store_code", "")
-                    type_label = {"low_rating": "評価低い", "rating_drop": "★下がった", "review_surge": "レビュー急増"}.get(r.get("alert_type", ""), r.get("alert_type", ""))
+                    label = f"{r.get('store_name') or ''} ({r.get('store_code')})".strip() or r.get(
+                        "store_code", ""
+                    )
+                    type_label = {
+                        "low_rating": "評価低い",
+                        "rating_drop": "★下がった",
+                        "review_surge": "レビュー急増",
+                    }.get(r.get("alert_type", ""), r.get("alert_type", ""))
                     alert_lines.append(f"・{label}: {type_label}")
                 alert_text = "\n".join(alert_lines) + "\n\n"
             payload = {
