@@ -118,9 +118,7 @@ def run_ingest():
             }
         ), 200
 
-    def _process_one(
-        place: dict, provider_place_id: str, tok: str
-    ) -> tuple[dict, dict]:
+    def _process_one(place: dict, provider_place_id: str, tok: str) -> tuple[dict, dict]:
         """1 店舗を取得・MERGE し、(rating_row, star_count_dict) を返す。401 のときは HTTPError をそのまま上げる。"""
         store_code = place["store_code"]
         avg_rating, total_count, reviews = gbp_reviews.fetch_reviews_for_location(
@@ -161,9 +159,10 @@ def run_ingest():
     )
     with ThreadPoolExecutor(max_workers=config.MAX_WORKERS) as executor:
         futures = {
-            executor.submit(
-                _process_one, place, provider_place_id, access_token
-            ): (place, provider_place_id)
+            executor.submit(_process_one, place, provider_place_id, access_token): (
+                place,
+                provider_place_id,
+            )
             for place, provider_place_id in places_with_id
         }
         for future in as_completed(futures):
@@ -179,6 +178,7 @@ def run_ingest():
                     errors += 1
                     if errors == 1:
                         import traceback
+
                         print(
                             f"[review_observation] 店舗 {store_code} でエラー（代表）: {e}",
                             file=sys.stderr,
@@ -204,6 +204,7 @@ def run_ingest():
                 errors += 1
                 if errors == 1:
                     import traceback
+
                     print(
                         f"[review_observation] 店舗 {store_code} でエラー（代表）: {e}",
                         file=sys.stderr,
@@ -245,6 +246,7 @@ def run_ingest():
                     errors += 1
                     if errors == 1:
                         import traceback
+
                         print(
                             f"[review_observation] 店舗 {store_code} リトライ後エラー: {retry_e}",
                             file=sys.stderr,
