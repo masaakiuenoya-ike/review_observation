@@ -383,7 +383,29 @@ gcloud scheduler jobs create http review-observation-daily \
   --oidc-token-audience="${RUN_URL}" \
   --headers="Content-Type=application/json" \
   --message-body="{}"
+# 作成後に attempt-deadline を 1800s に延長すること（取込が長時間かかるため）
+gcloud scheduler jobs update http review-observation-daily --location=asia-northeast1 --attempt-deadline=1800s
 ```
+
+### 10.4b 日次 Slack サマリ（毎日 9:00 JST・1日1回各店舗の評価・前日比を通知）
+
+取込は行わず、BQ の直近データを元に各店舗の評価・前日比を Slack に送る。
+
+```bash
+gcloud scheduler jobs create http review-observation-daily-slack \
+  --location="${REGION}" \
+  --schedule="0 9 * * *" \
+  --time-zone="Asia/Tokyo" \
+  --uri="${RUN_URL}/daily-summary" \
+  --http-method=POST \
+  --oidc-service-account-email="${SCHEDULER_SA}" \
+  --oidc-token-audience="${RUN_URL}" \
+  --headers="Content-Type=application/json" \
+  --message-body="{}"
+```
+
+- **SLACK_WEBHOOK_URL** が Cloud Run の環境変数／Secret に設定されている必要がある。
+- 応答は BQ 参照＋Slack 送信のみのため、attempt-deadline はデフォルト（180s）でよい。
 
 ### 10.5 月次ジョブ（毎月1日 09:00 JST）
 ```bash
@@ -483,6 +505,16 @@ bash scripts/report_scheduler_status.sh
 **補足**: `status.code: 13` は、Cloud Run が 5xx を返した場合や、接続がタイムアウトした場合などに付く。まず Cloud Run のログで実際の HTTP ステータスとエラー内容を確認する。
 
 **500 かつ latency が約 30 秒で gunicorn handle_abort / job.result(timeout=...) のトレースバック**: Gunicorn の **worker タイムアウト**（デフォルト 30 秒）でリクエストが打ち切られている。Dockerfile で `--timeout 600` を指定して再デプロイし、Cloud Run のリクエストタイムアウトも 600 秒にすること。
+
+### 10.10 v_latest_with_delta_performance が更新されない／空のとき
+
+**原因**: `v_latest_with_delta_performance` は **performance_daily_snapshot**（日次）を参照しているが、このテーブルには**現状どこからもデータを投入していない**（日次パフォーマンス取込ジョブは未実装）。そのため VIEW は常に 0 行。
+
+**対処**
+
+- **月次パフォーマンス**（表示回数・電話・ルート検索・ウェブクリック）を見たい場合: **v_latest_available_performance_monthly** を使用する。こちらは `performance_monthly_snapshot` を参照し、xlsx インポート等で月次データがあれば値が出る。
+- VIEW の作成: `sql/002_create_views.sql` を YOUR_DATASET → mart_gbp に置換して実行すると、`v_latest_with_delta_performance` と `v_latest_available_performance_monthly` の両方が作成される。
+- 将来、日次パフォーマンスを取得するジョブを実装し `performance_daily_snapshot` に投入すれば、`v_latest_with_delta_performance` にも自動で値が入る。
 
 ---
 

@@ -33,6 +33,21 @@ def health():
     return "", 200
 
 
+@app.route("/daily-summary", methods=["POST"])
+def run_daily_summary():
+    """
+    1日1回用: 取込は行わず、BQ の直近取込データを元に各店舗の評価・前日比を Slack に送る。
+    Cloud Scheduler で毎日 1 回（例: 9:00 JST）呼ぶ想定。
+    """
+    print("[review_observation] POST /daily-summary started", flush=True)
+    try:
+        slack_notify.send_daily_summary()
+    except Exception as e:
+        print(f"[review_observation] daily-summary failed: {e}", file=sys.stderr)
+        return jsonify({"ok": False, "error": str(e)}), 500
+    return jsonify({"ok": True, "message": "daily summary sent"}), 200
+
+
 @app.route("/", methods=["POST"])
 def run_ingest():
     """定点観測: places_provider_map 読込 → GBP reviews.list → ratings_daily_snapshot / reviews MERGE。"""
@@ -123,7 +138,12 @@ def run_ingest():
                 rating_rows=rating_rows,
             )
             star_counts_per_store.append(
-                {"store_code": store_code, "count_1star": c1, "count_5star": c5}
+                {
+                    "store_code": store_code,
+                    "store_name": place.get("display_name") or "",
+                    "count_1star": c1,
+                    "count_5star": c5,
+                }
             )
         except requests.exceptions.HTTPError as e:
             if e.response is not None and e.response.status_code == 401:
@@ -145,7 +165,12 @@ def run_ingest():
                         rating_rows=rating_rows,
                     )
                     star_counts_per_store.append(
-                        {"store_code": store_code, "count_1star": c1, "count_5star": c5}
+                        {
+                            "store_code": store_code,
+                            "store_name": place.get("display_name") or "",
+                            "count_1star": c1,
+                            "count_5star": c5,
+                        }
                     )
                 except Exception as retry_e:
                     errors += 1
@@ -168,7 +193,12 @@ def run_ingest():
                         }
                     )
                     star_counts_per_store.append(
-                        {"store_code": store_code, "count_1star": 0, "count_5star": 0}
+                        {
+                            "store_code": store_code,
+                            "store_name": place.get("display_name") or "",
+                            "count_1star": 0,
+                            "count_5star": 0,
+                        }
                     )
                     continue
             else:
@@ -192,7 +222,12 @@ def run_ingest():
                     }
                 )
                 star_counts_per_store.append(
-                    {"store_code": store_code, "count_1star": 0, "count_5star": 0}
+                    {
+                        "store_code": store_code,
+                        "store_name": place.get("display_name") or "",
+                        "count_1star": 0,
+                        "count_5star": 0,
+                    }
                 )
                 continue
         except Exception as e:
@@ -216,7 +251,12 @@ def run_ingest():
                 }
             )
             star_counts_per_store.append(
-                {"store_code": store_code, "count_1star": 0, "count_5star": 0}
+                {
+                    "store_code": store_code,
+                    "store_name": place.get("display_name") or "",
+                    "count_1star": 0,
+                    "count_5star": 0,
+                }
             )
             # 店舗単位で status='error' を記録。全体は 200 を返す
             continue

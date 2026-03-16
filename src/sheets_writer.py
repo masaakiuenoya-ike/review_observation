@@ -1,6 +1,7 @@
 """
-BigQuery VIEW（v_latest_with_delta_ratings / v_rating_alerts）を参照し、
+BigQuery VIEW（v_latest_available_ratings / v_latest_available_alerts）を参照し、
 Google Sheets の LATEST / ALERT / サマリ タブを更新する。
+直近の取込日で表示するため、当日の取込がなくても値が出る。
 """
 
 from __future__ import annotations
@@ -12,10 +13,11 @@ from . import config
 from . import bq_ops
 
 
-# LATEST タブの列（v_latest_with_delta_ratings の順）
+# LATEST タブの列（v_latest_available_ratings の順）
 LATEST_COLUMNS = [
     "snapshot_date",
     "store_code",
+    "store_name",
     "provider",
     "provider_place_id",
     "rating_value",
@@ -27,10 +29,11 @@ LATEST_COLUMNS = [
     "delta_review_count",
 ]
 
-# ALERT タブの列（v_rating_alerts の順）
+# ALERT タブの列（v_latest_available_alerts の順）
 ALERT_COLUMNS = [
     "snapshot_date",
     "store_code",
+    "store_name",
     "provider",
     "alert_type",
     "rating_value",
@@ -72,14 +75,14 @@ def _fetch_summary_rows(client: Any) -> list[list[Any]]:
     """サマリタブ用: 全体集計とアラート内訳を BQ から取得し、行のリストで返す。"""
     ds = config.BQ_DATASET
     project = config.BQ_PROJECT
-    # 全体サマリ（今日の v_latest から）
+    # 全体サマリ（直近取込日の v_latest_available_ratings から）
     q_summary = f"""
     SELECT
       MAX(snapshot_date) AS snapshot_date,
       COUNT(*) AS store_count,
       ROUND(AVG(rating_value), 2) AS avg_rating,
       SUM(review_count) AS total_reviews
-    FROM `{project}.{ds}.v_latest_with_delta_ratings`
+    FROM `{project}.{ds}.v_latest_available_ratings`
     WHERE status = 'ok'
     """
     job = client.query(q_summary)
@@ -87,7 +90,7 @@ def _fetch_summary_rows(client: Any) -> list[list[Any]]:
     # アラート内訳
     q_alerts = f"""
     SELECT alert_type, COUNT(*) AS cnt
-    FROM `{project}.{ds}.v_rating_alerts`
+    FROM `{project}.{ds}.v_latest_available_alerts`
     GROUP BY alert_type
     ORDER BY alert_type
     """
@@ -169,8 +172,9 @@ def _clear_and_update(sheet_id: str, tab_name: str, rows: list[list[Any]]) -> No
 
 def write_latest_and_alerts() -> None:
     """
-    SHEET_ID が設定されていれば、v_latest_with_delta_ratings → LATEST、
-    v_rating_alerts → ALERT、集計 → サマリ タブを全置換する。未設定なら何もしない。
+    SHEET_ID が設定されていれば、v_latest_available_ratings → LATEST、
+    v_latest_available_alerts → ALERT、集計 → サマリ タブを全置換する。未設定なら何もしない。
+    直近の取込日で表示するため、当日の取込がなくても値が出る。
     必要なタブが無い場合は自動作成する。
     """
     if not config.SHEET_ID:
@@ -185,8 +189,8 @@ def write_latest_and_alerts() -> None:
     service = _get_sheets_service()
     _ensure_tabs_exist(service, config.SHEET_ID)
     client = bq_ops.get_client()
-    latest_rows = _fetch_view(client, "v_latest_with_delta_ratings", LATEST_COLUMNS)
-    alert_rows = _fetch_view(client, "v_rating_alerts", ALERT_COLUMNS)
+    latest_rows = _fetch_view(client, "v_latest_available_ratings", LATEST_COLUMNS)
+    alert_rows = _fetch_view(client, "v_latest_available_alerts", ALERT_COLUMNS)
     summary_rows = _fetch_summary_rows(client)
     _clear_and_update(config.SHEET_ID, config.SHEET_TAB_LATEST, latest_rows)
     _clear_and_update(config.SHEET_ID, config.SHEET_TAB_ALERT, alert_rows)
