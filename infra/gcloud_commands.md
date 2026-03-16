@@ -217,6 +217,7 @@ bq query --project_id=ikeuchi-ga4 --location=asia-northeast1 --use_legacy_sql=fa
 - 既存テーブルに列を追加する場合は `sql/001b_alter_add_store_name.sql` を YOUR_DATASET → mart_gbp に置換し、1 文ずつ実行（既に列がある場合はエラーになるのでスキップ）。
 - **v_latest_with_delta_ratings** には **store_name** が含まれています。BQ で出ない場合は **002_create_views.sql を mart_gbp で再実行**してください。
 - **v_ratings_daily_snapshot**・**v_reviews** は、テーブルの store_name を優先し、NULL の行は `places_provider_map.display_name` で補います。テーブルを直接見ても store_name 列が表示されます。
+- **store_name を store_code の右隣に表示**したい場合: テーブルを再作成する `sql/001d_reorder_store_name_after_store_code.sql` を 1 文ずつ実行（手順はファイル内の注意を参照）。実行後、**reviews** は空になるため、取込 **POST /** を 1 回実行して再投入すること。
 
 ---
 
@@ -374,6 +375,19 @@ gcloud scheduler jobs create http review-observation-hourly \
   gcloud scheduler jobs update http review-observation-hourly --location=asia-northeast1 --attempt-deadline=1800s
   gcloud scheduler jobs update http review-observation-daily --location=asia-northeast1 --attempt-deadline=1800s
   ```
+
+**Scheduler とデータ更新の確認**:
+```bash
+# ジョブ一覧・最終実行・ステータス（code 0=成功, 4=DEADLINE_EXCEEDED）
+gcloud scheduler jobs list --project=ikeuchi-data-sync --location=asia-northeast1 \
+  --format="table(name.basename(),schedule,state,lastAttemptTime,status.code)" --filter="name:review-observation"
+
+# BQ の直近取込日・件数
+bq query --project_id=ikeuchi-ga4 --use_legacy_sql=false \
+  "SELECT MAX(snapshot_date) AS latest_date, COUNT(*) AS cnt FROM \`ikeuchi-ga4.mart_gbp.ratings_daily_snapshot\`"
+bq query --project_id=ikeuchi-ga4 --use_legacy_sql=false \
+  "SELECT MAX(ingested_at) AS latest_ingested, COUNT(*) AS cnt FROM \`ikeuchi-ga4.mart_gbp.reviews\`"
+```
 
 ### 10.4 日次ジョブ（毎日 09:00 JST・任意）
 
