@@ -239,13 +239,12 @@ def run_ingest():
                 flush=True,
             )
             import traceback
+
             traceback.print_exc(file=sys.stderr)
 
     if config.SLACK_WEBHOOK_URL:
         try:
-            slack_notify.send_slack_notification(
-                snapshot_date.isoformat(), star_counts_per_store
-            )
+            slack_notify.send_slack_notification(snapshot_date.isoformat(), star_counts_per_store)
         except Exception as e:
             print(f"[review_observation] Slack notification failed: {e}", file=sys.stderr)
 

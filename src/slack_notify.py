@@ -55,7 +55,11 @@ def _format_slack_blocks(
         for r in alerts:
             store = r.get("store_code", "")
             atype = r.get("alert_type", "")
-            label = {"low_rating": "評価低い(<4.2)", "rating_drop": "★下がった", "review_surge": "レビュー急増"}.get(atype, atype)
+            label = {
+                "low_rating": "評価低い(<4.2)",
+                "rating_drop": "★下がった",
+                "review_surge": "レビュー急増",
+            }.get(atype, atype)
             val = r.get("rating_value")
             delta = r.get("delta_rating")
             cnt = r.get("delta_review_count")
@@ -74,7 +78,9 @@ def _format_slack_blocks(
         lines.append("\n★が上がった: なし")
 
     # 今回の取込で★1/★5が増えた店舗
-    star_relevant = [s for s in star_counts if (s.get("count_1star") or 0) > 0 or (s.get("count_5star") or 0) > 0]
+    star_relevant = [
+        s for s in star_counts if (s.get("count_1star") or 0) > 0 or (s.get("count_5star") or 0) > 0
+    ]
     if star_relevant:
         lines.append("\n*今回の取込で★1/★5が含まれた店舗*")
         for s in star_relevant:
@@ -112,9 +118,7 @@ def send_slack_notification(
         client = bq_ops.get_client()
         alerts = _fetch_alerts(client)
         rating_ups = _fetch_rating_up(client)
-        payload = _format_slack_blocks(
-            snapshot_date, alerts, rating_ups, star_counts_per_store
-        )
+        payload = _format_slack_blocks(snapshot_date, alerts, rating_ups, star_counts_per_store)
         payload["text"] = "GBP レビュー取込サマリ"  # 通知オフ時のプレーンテキスト
         r = requests.post(
             config.SLACK_WEBHOOK_URL,
@@ -124,4 +128,5 @@ def send_slack_notification(
         r.raise_for_status()
     except Exception as e:
         import sys
+
         print(f"[review_observation] Slack notification failed: {e}", file=sys.stderr)

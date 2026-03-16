@@ -97,12 +97,14 @@ def _fetch_summary_rows(client: Any) -> list[list[Any]]:
     out: list[list[Any]] = []
     out.append(["更新日", "店舗数", "平均評価", "総レビュー数"])
     if summary_row:
-        out.append([
-            _cell_value(summary_row.get("snapshot_date")),
-            summary_row.get("store_count"),
-            summary_row.get("avg_rating"),
-            summary_row.get("total_reviews"),
-        ])
+        out.append(
+            [
+                _cell_value(summary_row.get("snapshot_date")),
+                summary_row.get("store_count"),
+                summary_row.get("avg_rating"),
+                summary_row.get("total_reviews"),
+            ]
+        )
     else:
         out.append(["", 0, "", 0])
     out.append([])
@@ -136,9 +138,7 @@ def _ensure_tabs_exist(service: Any, sheet_id: str) -> None:
     missing = required - existing
     if not missing:
         return
-    requests = [
-        {"addSheet": {"properties": {"title": title}}} for title in sorted(missing)
-    ]
+    requests = [{"addSheet": {"properties": {"title": title}}} for title in sorted(missing)]
     service.spreadsheets().batchUpdate(
         spreadsheetId=sheet_id,
         body={"requests": requests},
@@ -175,6 +175,7 @@ def write_latest_and_alerts() -> None:
     """
     if not config.SHEET_ID:
         import sys
+
         print(
             "[review_observation] Sheets skip: SHEET_ID not set",
             file=sys.stderr,
