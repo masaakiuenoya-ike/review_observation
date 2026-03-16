@@ -183,7 +183,9 @@ def _format_daily_summary_blocks(
             up_str = f"+{delta}" if delta is not None else "-"
             cur_str = str(current) if current is not None else "-"
             prev_str = str(prev) if prev is not None else "-"
-            lines.append(f"{name}: 上がり幅 {up_str}, 現状のGBP評価 {cur_str}, 以前のGBP評価 {prev_str}")
+            lines.append(
+                f"{name}: 上がり幅 {up_str}, 現状のGBP評価 {cur_str}, 以前のGBP評価 {prev_str}"
+            )
     else:
         lines.append("（なし）")
     lines.append("")
