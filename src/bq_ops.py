@@ -52,64 +52,71 @@ def merge_ratings_daily_snapshot(
     ingest_run_id: str,
     rows: list[dict[str, Any]],
 ) -> None:
-    """ratings_daily_snapshot に MERGE（snapshot_date + store_code + provider）。"""
+    """ratings_daily_snapshot に MERGE（snapshot_date + store_code + provider）。一括 UNNEST で 1 クエリ。"""
     if not rows:
         return
     client = get_client()
     ds = config.BQ_DATASET
     table = f"{config.BQ_PROJECT}.{ds}.ratings_daily_snapshot"
-    # 1 行ずつ MERGE（簡易実装。まとめて UNNEST でも可）
-    for r in rows:
-        sql = f"""
-        MERGE `{table}` AS T
-        USING (SELECT
+    store_codes = [r["store_code"] for r in rows]
+    providers = [r["provider"] for r in rows]
+    place_ids = [r.get("provider_place_id") or "" for r in rows]
+    rating_values = [r.get("rating_value") for r in rows]
+    review_counts = [r.get("review_count", 0) for r in rows]
+    statuses = [r.get("status", "ok") for r in rows]
+    sql = f"""
+    MERGE `{table}` AS T
+    USING (
+        SELECT
             @snapshot_date AS snapshot_date,
-            @store_code AS store_code,
-            @provider AS provider,
-            @provider_place_id AS provider_place_id,
-            @rating_value AS rating_value,
-            @review_count AS review_count,
+            s.store_code AS store_code,
+            s.provider AS provider,
+            s.provider_place_id AS provider_place_id,
+            s.rating_value AS rating_value,
+            s.review_count AS review_count,
             @ingest_run_id AS ingest_run_id,
-            @status AS status
-        ) AS S
-        ON T.snapshot_date = S.snapshot_date AND T.store_code = S.store_code AND T.provider = S.provider
-        WHEN MATCHED THEN UPDATE SET
-            provider_place_id = S.provider_place_id,
-            rating_value = S.rating_value,
-            review_count = S.review_count,
-            fetched_at = CURRENT_TIMESTAMP(),
-            ingest_run_id = S.ingest_run_id,
-            status = S.status
-        WHEN NOT MATCHED THEN INSERT (
-            snapshot_date, store_code, provider, provider_place_id,
-            rating_value, review_count, fetched_at, ingest_run_id, status
-        ) VALUES (
-            S.snapshot_date, S.store_code, S.provider, S.provider_place_id,
-            S.rating_value, S.review_count, CURRENT_TIMESTAMP(), S.ingest_run_id, S.status
-        )
-        """
-        job = client.query(
-            sql,
-            job_config=bigquery.QueryJobConfig(
-                query_parameters=[
-                    bigquery.ScalarQueryParameter(
-                        "snapshot_date", "DATE", snapshot_date.isoformat()
-                    ),
-                    bigquery.ScalarQueryParameter("store_code", "STRING", r["store_code"]),
-                    bigquery.ScalarQueryParameter("provider", "STRING", r["provider"]),
-                    bigquery.ScalarQueryParameter(
-                        "provider_place_id", "STRING", r.get("provider_place_id") or ""
-                    ),
-                    bigquery.ScalarQueryParameter("rating_value", "FLOAT64", r.get("rating_value")),
-                    bigquery.ScalarQueryParameter(
-                        "review_count", "INT64", r.get("review_count", 0)
-                    ),
-                    bigquery.ScalarQueryParameter("ingest_run_id", "STRING", ingest_run_id),
-                    bigquery.ScalarQueryParameter("status", "STRING", r.get("status", "ok")),
-                ]
-            ),
-        )
-        job.result(timeout=60)
+            s.status AS status
+        FROM (
+            SELECT sc AS store_code, p AS provider, pid AS provider_place_id,
+                   rv AS rating_value, rc AS review_count, st AS status
+            FROM UNNEST(@store_codes) AS sc WITH OFFSET o
+            JOIN UNNEST(@providers) AS p WITH OFFSET o2 ON o = o2
+            JOIN UNNEST(@place_ids) AS pid WITH OFFSET o3 ON o = o3
+            JOIN UNNEST(@rating_values) AS rv WITH OFFSET o4 ON o = o4
+            JOIN UNNEST(@review_counts) AS rc WITH OFFSET o5 ON o = o5
+            JOIN UNNEST(@statuses) AS st WITH OFFSET o6 ON o = o6
+        ) AS s
+    ) AS S
+    ON T.snapshot_date = S.snapshot_date AND T.store_code = S.store_code AND T.provider = S.provider
+    WHEN MATCHED THEN UPDATE SET
+        provider_place_id = S.provider_place_id,
+        rating_value = S.rating_value,
+        review_count = S.review_count,
+        fetched_at = CURRENT_TIMESTAMP(),
+        ingest_run_id = S.ingest_run_id,
+        status = S.status
+    WHEN NOT MATCHED THEN INSERT (
+        snapshot_date, store_code, provider, provider_place_id,
+        rating_value, review_count, fetched_at, ingest_run_id, status
+    ) VALUES (
+        S.snapshot_date, S.store_code, S.provider, S.provider_place_id,
+        S.rating_value, S.review_count, CURRENT_TIMESTAMP(), S.ingest_run_id, S.status
+    )
+    """
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("snapshot_date", "DATE", snapshot_date.isoformat()),
+            bigquery.ScalarQueryParameter("ingest_run_id", "STRING", ingest_run_id),
+            bigquery.ArrayQueryParameter("store_codes", "STRING", store_codes),
+            bigquery.ArrayQueryParameter("providers", "STRING", providers),
+            bigquery.ArrayQueryParameter("place_ids", "STRING", place_ids),
+            bigquery.ArrayQueryParameter("rating_values", "FLOAT64", rating_values),
+            bigquery.ArrayQueryParameter("review_counts", "INT64", review_counts),
+            bigquery.ArrayQueryParameter("statuses", "STRING", statuses),
+        ]
+    )
+    job = client.query(sql, job_config=job_config)
+    job.result(timeout=120)
 
 
 # 1 店舗あたりのレビューを何件ずつまとめて MERGE するか（BQ パラメータ上限を避ける）

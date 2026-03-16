@@ -362,10 +362,10 @@ gcloud scheduler jobs create http review-observation-hourly \
 
 - `0 * * * *` = 毎時 0 分（1日 24 回）。
 - 既に同名ジョブがある場合は `gcloud scheduler jobs delete review-observation-hourly --location=${REGION}` で削除してから再作成。
-- 取込に数分かかるため、**attemptDeadline** を 1200 秒に延長すること（デフォルト 180 秒だと code: 4 タイムアウトになる）。deploy.yml で Cloud Run は `--timeout=1200` を指定済み:
+- 取込に数分かかるため、**attemptDeadline** を延長すること（デフォルト 180 秒だと code: 4 になる）。**Scheduler の上限は 30 分（1800s）**。Cloud Run は deploy で `--timeout=3600`:
   ```bash
-  gcloud scheduler jobs update http review-observation-hourly --location=asia-northeast1 --attempt-deadline=1200s
-  gcloud scheduler jobs update http review-observation-daily --location=asia-northeast1 --attempt-deadline=1200s
+  gcloud scheduler jobs update http review-observation-hourly --location=asia-northeast1 --attempt-deadline=1800s
+  gcloud scheduler jobs update http review-observation-daily --location=asia-northeast1 --attempt-deadline=1800s
   ```
 
 ### 10.4 日次ジョブ（毎日 09:00 JST・任意）
