@@ -177,9 +177,9 @@ def write_latest_and_alerts() -> None:
     直近の取込日で表示するため、当日の取込がなくても値が出る。
     必要なタブが無い場合は自動作成する。
     """
-    if not config.SHEET_ID:
-        import sys
+    import sys
 
+    if not config.SHEET_ID:
         print(
             "[review_observation] Sheets skip: SHEET_ID not set",
             file=sys.stderr,
@@ -192,6 +192,19 @@ def write_latest_and_alerts() -> None:
     latest_rows = _fetch_view(client, "v_latest_available_ratings", LATEST_COLUMNS)
     alert_rows = _fetch_view(client, "v_latest_available_alerts", ALERT_COLUMNS)
     summary_rows = _fetch_summary_rows(client)
+    # 件数ログ（ヘッダー1行含む。0件なら VIEW が空か BQ 権限の可能性）
+    n_latest = len(latest_rows)
+    n_alert = len(alert_rows)
+    print(
+        f"[review_observation] Sheets: LATEST={n_latest} rows, ALERT={n_alert} rows (from BQ)",
+        flush=True,
+    )
+    if n_latest <= 1:
+        print(
+            "[review_observation] Sheets: v_latest_available_ratings returned no data rows; check BQ VIEW and ratings_daily_snapshot",
+            file=sys.stderr,
+            flush=True,
+        )
     _clear_and_update(config.SHEET_ID, config.SHEET_TAB_LATEST, latest_rows)
     _clear_and_update(config.SHEET_ID, config.SHEET_TAB_ALERT, alert_rows)
     _clear_and_update(config.SHEET_ID, config.SHEET_TAB_SUMMARY, summary_rows)
