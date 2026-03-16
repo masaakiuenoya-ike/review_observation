@@ -22,6 +22,12 @@ def _round1(val: Any) -> Any:
         return val
 
 
+def _store_label(r: dict) -> str:
+    """店舗表示用ラベル（store_code は出力しない。店舗名のみ）。"""
+    store_name = (r.get("store_name") or "").strip()
+    return store_name if store_name else "（店舗名なし）"
+
+
 def _fetch_alerts(client: Any) -> list[dict[str, Any]]:
     """v_latest_available_alerts（直近取込日のアラート）を取得。"""
     ds = config.BQ_DATASET
@@ -55,52 +61,53 @@ def _format_slack_blocks(
     rating_ups: list[dict],
     star_counts: list[dict],
 ) -> dict[str, Any]:
-    """Slack Block Kit の blocks を組み立て（通知内容が空でもヘッダーは出す）。"""
+    """Slack Block Kit の blocks。評価UP/DOWN/変化無（評価低い・store_code は出さない）、★1/★5。"""
     lines: list[str] = []
     lines.append(f"*GBP レビュー取込サマリ*（{snapshot_date}）")
 
-    # ★下がった / 評価低い / レビュー急増
-    if alerts:
-        lines.append("\n*アラート*")
-        for r in alerts:
-            store_code = r.get("store_code", "")
-            store_name = r.get("store_name") or ""
-            store_label = f"{store_name} ({store_code})" if store_name else store_code
-            atype = r.get("alert_type", "")
-            label = {
-                "low_rating": "評価低い(<4.2)",
-                "rating_drop": "★下がった",
-                "review_surge": "レビュー急増",
-            }.get(atype, atype)
-            val = _round1(r.get("rating_value"))
-            delta = _round1(r.get("delta_rating"))
-            cnt = r.get("delta_review_count")
-            lines.append(f"・{store_label}: {label} (評価={val}, Δ={delta}, レビューΔ={cnt})")
-    else:
-        lines.append("\nアラート: なし")
-
-    # ★上がった
+    # 評価UP（rating_ups = ★が上がった）。上がり幅・現状・以前のGBP評価
+    lines.append("\n*評価UP*")
     if rating_ups:
-        lines.append("\n*★が上がった*")
         for r in rating_ups:
-            store_code = r.get("store_code", "")
-            store_name = r.get("store_name") or ""
-            store_label = f"{store_name} ({store_code})" if store_name else store_code
+            name = _store_label(r)
             delta = _round1(r.get("delta_rating"))
-            lines.append(f"・{store_label}: Δ評価 +{delta}")
+            current = _round1(r.get("rating_value"))
+            prev = None
+            if current is not None and delta is not None:
+                try:
+                    prev = round(float(current) - float(delta), 1)
+                except (TypeError, ValueError):
+                    pass
+            up_str = f"+{delta}" if delta is not None else "-"
+            cur_str = str(current) if current is not None else "-"
+            prev_str = str(prev) if prev is not None else "-"
+            lines.append(
+                f"{name}: 上がり幅 {up_str}, 現状のGBP評価 {cur_str}, 以前のGBP評価 {prev_str}"
+            )
     else:
-        lines.append("\n★が上がった: なし")
+        lines.append("（なし）")
 
-    # 今回の取込で★1/★5が増えた店舗
+    # 評価DOWN（alerts のうち rating_drop のみ。評価低い・レビュー急増は出さない）
+    rating_downs = [r for r in alerts if r.get("alert_type") == "rating_drop"]
+    lines.append("\n*評価DOWN*")
+    if rating_downs:
+        for r in rating_downs:
+            lines.append(_store_label(r))
+    else:
+        lines.append("（なし）")
+
+    # 評価変化無（取込サマリでは BQ を増やさず「なし」）
+    lines.append("\n*評価変化無*")
+    lines.append("（なし）")
+
+    # 今回の取込で★1/★5が含まれた店舗（store_code は出さない）
     star_relevant = [
         s for s in star_counts if (s.get("count_1star") or 0) > 0 or (s.get("count_5star") or 0) > 0
     ]
+    lines.append("\n*今回の取込で★1/★5が含まれた店舗*")
     if star_relevant:
-        lines.append("\n*今回の取込で★1/★5が含まれた店舗*")
         for s in star_relevant:
-            store_code = s.get("store_code", "")
-            store_name = s.get("store_name") or ""
-            store_label = f"{store_name} ({store_code})" if store_name else store_code
+            label = _store_label(s)
             c1 = s.get("count_1star") or 0
             c5 = s.get("count_5star") or 0
             parts = []
@@ -108,9 +115,9 @@ def _format_slack_blocks(
                 parts.append(f"★1: {c1}件")
             if c5 > 0:
                 parts.append(f"★5: {c5}件")
-            lines.append(f"・{store_label}: {', '.join(parts)}")
+            lines.append(f"{label}: {', '.join(parts)}")
     else:
-        lines.append("\n今回の取込で★1/★5: 該当なし")
+        lines.append("該当なし")
 
     text = "\n".join(lines)
     return {
@@ -132,12 +139,6 @@ def _fetch_all_ratings_for_daily(client: Any) -> list[dict[str, Any]]:
     """
     job = client.query(q)
     return [dict(r) for r in job.result(timeout=90)]
-
-
-def _store_label(r: dict) -> str:
-    """店舗表示用ラベル（store_code は出力しない。店舗名のみ）。"""
-    store_name = (r.get("store_name") or "").strip()
-    return store_name if store_name else "（店舗名なし）"
 
 
 def _delta_category(r: dict) -> str:
