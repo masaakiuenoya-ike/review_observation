@@ -423,12 +423,40 @@ gcloud scheduler jobs create http review-observation-monthly \
 
 > 実装側で `run_monthly: true` を見て monthly を実行する、または別エンドポイントに分けてもOK。
 
+### 10.5b Sheets のみ更新（store_name 反映・取込タイムアウト時用）
+
+取込は行わず、BQ の v_latest_available_ratings / v_latest_available_alerts を読んで **Sheets の LATEST / ALERT / サマリだけ**更新する。取込が 30 分でタイムアウトしてシートが更新されないときや、**store_name** をすぐ反映したいときに使う。
+
+```bash
+# 手動で 1 回実行（Scheduler ジョブを作る場合は下記を参考に）
+curl -X POST -H "Authorization: Bearer $(gcloud auth print-identity-token --audiences=https://review-observation-XXXX.run.app)" \
+  https://review-observation-XXXX.run.app/sheets-update
+```
+
+Scheduler で毎時 :20 に実行する例（:00 の取込のあとシートだけ確実に更新したい場合）:
+
+```bash
+gcloud scheduler jobs create http review-observation-sheets-update \
+  --location=asia-northeast1 \
+  --schedule="20 * * * *" \
+  --time-zone="Asia/Tokyo" \
+  --uri="${RUN_URL}/sheets-update" \
+  --http-method=POST \
+  --oidc-service-account-email="${SCHEDULER_SA}" \
+  --oidc-token-audience="${RUN_URL}" \
+  --headers="Content-Type=application/json" \
+  --message-body="{}"
+```
+
+- **SHEET_ID** が Cloud Run に設定されている必要がある。未設定の場合は 400 を返す。
+
 ### 10.6 ジョブ一覧・手動実行
 
 ```bash
 gcloud scheduler jobs list --location=asia-northeast1
 # 手動で 1 回実行
 gcloud scheduler jobs run review-observation-hourly --location=asia-northeast1
+gcloud scheduler jobs run review-observation-sheets-update --location=asia-northeast1  # 作成済みなら
 ```
 
 ### 10.7 実行状況の確認

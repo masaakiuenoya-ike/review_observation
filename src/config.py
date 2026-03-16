@@ -24,3 +24,15 @@ SHEET_TAB_SUMMARY = os.environ.get("SHEET_TAB_SUMMARY", "サマリ")
 
 # Slack（未設定なら通知スキップ）
 SLACK_WEBHOOK_URL = (os.environ.get("SLACK_WEBHOOK_URL") or "").strip()
+
+# 取込の並列数（店舗ごとの GBP 取得＋BQ MERGE を同時に実行する数）。デフォルト 5。
+def _parse_max_workers() -> int:
+    v = os.environ.get("MAX_WORKERS", "5").strip()
+    try:
+        n = int(v)
+        return max(1, min(n, 16))
+    except ValueError:
+        return 5
+
+
+MAX_WORKERS = _parse_max_workers()

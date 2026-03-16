@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import sys
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -31,6 +32,25 @@ TZ = ZoneInfo("Asia/Tokyo")
 @app.route("/health", methods=["GET"])
 def health():
     return "", 200
+
+
+@app.route("/sheets-update", methods=["POST"])
+def run_sheets_update():
+    """
+    BQ の v_latest_available_ratings / v_latest_available_alerts を読んで
+    Sheets の LATEST / ALERT / サマリ のみ更新する。取込は行わない。
+    store_name を反映したいときや、取込がタイムアウトしてシートが更新されていないときに実行する。
+    """
+    print("[review_observation] POST /sheets-update started", flush=True)
+    if not config.SHEET_ID:
+        return jsonify({"ok": False, "error": "SHEET_ID not set"}), 400
+    try:
+        sheets_writer.write_latest_and_alerts()
+        print("[review_observation] Sheets LATEST/ALERT/サマリ updated", flush=True)
+    except Exception as e:
+        print(f"[review_observation] sheets-update failed: {e}", file=sys.stderr)
+        return jsonify({"ok": False, "error": str(e)}), 500
+    return jsonify({"ok": True, "message": "sheets updated"}), 200
 
 
 @app.route("/daily-summary", methods=["POST"])
@@ -81,33 +101,30 @@ def run_ingest():
     except Exception as e:
         return jsonify({"ok": False, "error": str(e), "ingest_run_id": ingest_run_id}), 500
 
-    print("[review_observation] fetching reviews for each place...", flush=True)
-    rating_rows: list[dict] = []
-    star_counts_per_store: list[dict] = []  # Slack用: 今回の取込で増えた★1/★5件数
-    errors = 0
-
-    def _fetch_and_merge(
-        *,
-        access_token: str,
-        place: dict,
-        store_code: str,
-        provider_place_id: str,
-        ingest_run_id: str,
-        rating_rows: list[dict],
-    ) -> tuple[int, int]:
-        """取得・MERGE を実行し、(今回の★1件数, 今回の★5件数) を返す。"""
-        avg_rating, total_count, reviews = gbp_reviews.fetch_reviews_for_location(
-            access_token, provider_place_id
-        )
-        rating_rows.append(
+    places_with_id = [
+        (p, (p.get("provider_place_id") or "").strip())
+        for p in places
+        if (p.get("provider_place_id") or "").strip()
+    ]
+    if not places_with_id:
+        return jsonify(
             {
-                "store_code": store_code,
-                "provider": place["provider"],
-                "provider_place_id": provider_place_id,
-                "rating_value": avg_rating,
-                "review_count": total_count,
-                "status": "ok",
+                "ok": True,
+                "ingest_run_id": ingest_run_id,
+                "snapshot_date": snapshot_date.isoformat(),
+                "processed": 0,
+                "errors": 0,
+                "message": "no places with provider_place_id",
             }
+        ), 200
+
+    def _process_one(
+        place: dict, provider_place_id: str, tok: str
+    ) -> tuple[dict, dict]:
+        """1 店舗を取得・MERGE し、(rating_row, star_count_dict) を返す。401 のときは HTTPError をそのまま上げる。"""
+        store_code = place["store_code"]
+        avg_rating, total_count, reviews = gbp_reviews.fetch_reviews_for_location(
+            tok, provider_place_id
         )
         bq_ops.merge_reviews(
             store_code=store_code,
@@ -118,71 +135,56 @@ def run_ingest():
         )
         count_1 = sum(1 for r in reviews if r.get("rating") == 1.0)
         count_5 = sum(1 for r in reviews if r.get("rating") == 5.0)
-        return (count_1, count_5)
+        rating_row = {
+            "store_code": store_code,
+            "provider": place["provider"],
+            "provider_place_id": provider_place_id,
+            "rating_value": avg_rating,
+            "review_count": total_count,
+            "status": "ok",
+        }
+        star_count = {
+            "store_code": store_code,
+            "store_name": place.get("display_name") or "",
+            "count_1star": count_1,
+            "count_5star": count_5,
+        }
+        return (rating_row, star_count)
 
-    for i, place in enumerate(places, 1):
-        store_code = place["store_code"]
-        provider_place_id = (place.get("provider_place_id") or "").strip()
-        if not provider_place_id:
-            continue
-        print(
-            f"[review_observation] place {i}/{len(places)} store_code={store_code}...", flush=True
-        )
-        try:
-            c1, c5 = _fetch_and_merge(
-                access_token=access_token,
-                place=place,
-                store_code=store_code,
-                provider_place_id=provider_place_id,
-                ingest_run_id=ingest_run_id,
-                rating_rows=rating_rows,
-            )
-            star_counts_per_store.append(
-                {
-                    "store_code": store_code,
-                    "store_name": place.get("display_name") or "",
-                    "count_1star": c1,
-                    "count_5star": c5,
-                }
-            )
-        except requests.exceptions.HTTPError as e:
-            if e.response is not None and e.response.status_code == 401:
-                print(
-                    "[review_observation] 401 (token expired?), refreshing access_token and retrying once...",
-                    flush=True,
-                    file=sys.stderr,
-                )
-                try:
-                    access_token = gbp_oauth.get_gbp_access_token(
-                        config.GBP_OAUTH_SECRET_NAME, config.GCP_PROJECT
-                    )
-                    c1, c5 = _fetch_and_merge(
-                        access_token=access_token,
-                        place=place,
-                        store_code=store_code,
-                        provider_place_id=provider_place_id,
-                        ingest_run_id=ingest_run_id,
-                        rating_rows=rating_rows,
-                    )
-                    star_counts_per_store.append(
-                        {
-                            "store_code": store_code,
-                            "store_name": place.get("display_name") or "",
-                            "count_1star": c1,
-                            "count_5star": c5,
-                        }
-                    )
-                except Exception as retry_e:
+    results_by_store: dict[str, tuple[dict, dict]] = {}
+    errors = 0
+    need_401_retry: list[tuple[dict, str]] = []
+
+    print(
+        f"[review_observation] fetching reviews for {len(places_with_id)} places (max_workers={config.MAX_WORKERS})...",
+        flush=True,
+    )
+    with ThreadPoolExecutor(max_workers=config.MAX_WORKERS) as executor:
+        futures = {
+            executor.submit(
+                _process_one, place, provider_place_id, access_token
+            ): (place, provider_place_id)
+            for place, provider_place_id in places_with_id
+        }
+        for future in as_completed(futures):
+            place, provider_place_id = futures[future]
+            store_code = place["store_code"]
+            try:
+                r_row, s_count = future.result()
+                results_by_store[store_code] = (r_row, s_count)
+            except requests.exceptions.HTTPError as e:
+                if e.response is not None and e.response.status_code == 401:
+                    need_401_retry.append((place, provider_place_id))
+                else:
                     errors += 1
                     if errors == 1:
                         import traceback
-
                         print(
-                            f"[review_observation] 店舗 {store_code} リトライ後もエラー: {retry_e}",
+                            f"[review_observation] 店舗 {store_code} でエラー（代表）: {e}",
                             file=sys.stderr,
                         )
                         traceback.print_exc(file=sys.stderr)
-                    rating_rows.append(
+                    results_by_store[store_code] = (
                         {
                             "store_code": store_code,
                             "provider": place["provider"],
@@ -190,28 +192,24 @@ def run_ingest():
                             "rating_value": None,
                             "review_count": None,
                             "status": "error",
-                        }
-                    )
-                    star_counts_per_store.append(
+                        },
                         {
                             "store_code": store_code,
                             "store_name": place.get("display_name") or "",
                             "count_1star": 0,
                             "count_5star": 0,
-                        }
+                        },
                     )
-                    continue
-            else:
+            except Exception as e:
                 errors += 1
                 if errors == 1:
                     import traceback
-
                     print(
                         f"[review_observation] 店舗 {store_code} でエラー（代表）: {e}",
                         file=sys.stderr,
                     )
                     traceback.print_exc(file=sys.stderr)
-                rating_rows.append(
+                results_by_store[store_code] = (
                     {
                         "store_code": store_code,
                         "provider": place["provider"],
@@ -219,47 +217,87 @@ def run_ingest():
                         "rating_value": None,
                         "review_count": None,
                         "status": "error",
-                    }
-                )
-                star_counts_per_store.append(
+                    },
                     {
                         "store_code": store_code,
                         "store_name": place.get("display_name") or "",
                         "count_1star": 0,
                         "count_5star": 0,
-                    }
+                    },
                 )
-                continue
-        except Exception as e:
-            errors += 1
-            # デバッグ用: 先頭1件だけ stderr に出力（同じエラーが31件続くため）
-            if errors == 1:
-                import traceback
 
-                print(
-                    f"[review_observation] 店舗 {store_code} でエラー（代表）: {e}", file=sys.stderr
-                )
-                traceback.print_exc(file=sys.stderr)
-            rating_rows.append(
-                {
-                    "store_code": store_code,
-                    "provider": place["provider"],
-                    "provider_place_id": provider_place_id,
-                    "rating_value": None,
-                    "review_count": None,
-                    "status": "error",
-                }
+    if need_401_retry:
+        print(
+            "[review_observation] 401 (token expired?), refreshing and retrying failed stores...",
+            flush=True,
+            file=sys.stderr,
+        )
+        try:
+            access_token = gbp_oauth.get_gbp_access_token(
+                config.GBP_OAUTH_SECRET_NAME, config.GCP_PROJECT
             )
-            star_counts_per_store.append(
-                {
-                    "store_code": store_code,
-                    "store_name": place.get("display_name") or "",
-                    "count_1star": 0,
-                    "count_5star": 0,
-                }
-            )
-            # 店舗単位で status='error' を記録。全体は 200 を返す
-            continue
+            for place, provider_place_id in need_401_retry:
+                store_code = place["store_code"]
+                try:
+                    r_row, s_count = _process_one(place, provider_place_id, access_token)
+                    results_by_store[store_code] = (r_row, s_count)
+                except Exception as retry_e:
+                    errors += 1
+                    if errors == 1:
+                        import traceback
+                        print(
+                            f"[review_observation] 店舗 {store_code} リトライ後エラー: {retry_e}",
+                            file=sys.stderr,
+                        )
+                        traceback.print_exc(file=sys.stderr)
+                    results_by_store[store_code] = (
+                        {
+                            "store_code": store_code,
+                            "provider": place["provider"],
+                            "provider_place_id": provider_place_id,
+                            "rating_value": None,
+                            "review_count": None,
+                            "status": "error",
+                        },
+                        {
+                            "store_code": store_code,
+                            "store_name": place.get("display_name") or "",
+                            "count_1star": 0,
+                            "count_5star": 0,
+                        },
+                    )
+        except Exception as e:
+            print(f"[review_observation] token refresh failed: {e}", file=sys.stderr)
+            for place, provider_place_id in need_401_retry:
+                store_code = place["store_code"]
+                if store_code not in results_by_store:
+                    errors += 1
+                    results_by_store[store_code] = (
+                        {
+                            "store_code": store_code,
+                            "provider": place["provider"],
+                            "provider_place_id": provider_place_id,
+                            "rating_value": None,
+                            "review_count": None,
+                            "status": "error",
+                        },
+                        {
+                            "store_code": store_code,
+                            "store_name": place.get("display_name") or "",
+                            "count_1star": 0,
+                            "count_5star": 0,
+                        },
+                    )
+
+    # 元の places 順で rating_rows / star_counts_per_store を並べる
+    store_order = [p["store_code"] for p in places if (p.get("provider_place_id") or "").strip()]
+    rating_rows = []
+    star_counts_per_store = []
+    for store_code in store_order:
+        if store_code in results_by_store:
+            r_row, s_count = results_by_store[store_code]
+            rating_rows.append(r_row)
+            star_counts_per_store.append(s_count)
 
     try:
         bq_ops.merge_ratings_daily_snapshot(snapshot_date, ingest_run_id, rating_rows)
