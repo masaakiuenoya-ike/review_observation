@@ -131,7 +131,7 @@ def _fetch_all_ratings_for_daily(client: Any) -> list[dict[str, Any]]:
     ORDER BY store_code
     """
     job = client.query(q)
-    return [dict(r) for r in job.result(timeout=120)]
+    return [dict(r) for r in job.result(timeout=90)]
 
 
 def _store_label(r: dict) -> str:

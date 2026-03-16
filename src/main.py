@@ -8,7 +8,7 @@ from __future__ import annotations
 import os
 import sys
 import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -53,18 +53,31 @@ def run_sheets_update():
     return jsonify({"ok": True, "message": "sheets updated"}), 200
 
 
+# daily-summary の最大実行時間（秒）。これを超えたら 503 を返してクライアントがハングしないようにする。
+DAILY_SUMMARY_TIMEOUT_SEC = 150
+
+
 @app.route("/daily-summary", methods=["POST"])
 def run_daily_summary():
     """
     1日1回用: 取込は行わず、BQ の直近取込データを元に各店舗の評価・前日比を Slack に送る。
     Cloud Scheduler で毎日 1 回（例: 9:00 JST）呼ぶ想定。
+    全体を DAILY_SUMMARY_TIMEOUT_SEC で打ち切り、必ず HTTP レスポンスを返す。
     """
     print("[review_observation] POST /daily-summary started", flush=True)
-    try:
-        slack_notify.send_daily_summary()
-    except Exception as e:
-        print(f"[review_observation] daily-summary failed: {e}", file=sys.stderr)
-        return jsonify({"ok": False, "error": str(e)}), 500
+    with ThreadPoolExecutor(max_workers=1) as ex:
+        future = ex.submit(slack_notify.send_daily_summary)
+        try:
+            future.result(timeout=DAILY_SUMMARY_TIMEOUT_SEC)
+        except FuturesTimeoutError:
+            print("[review_observation] daily-summary timed out", file=sys.stderr)
+            return (
+                jsonify({"ok": False, "error": "daily summary timed out"}),
+                503,
+            )
+        except Exception as e:
+            print(f"[review_observation] daily-summary failed: {e}", file=sys.stderr)
+            return jsonify({"ok": False, "error": str(e)}), 500
     return jsonify({"ok": True, "message": "daily summary sent"}), 200
 
 
