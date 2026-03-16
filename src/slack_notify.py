@@ -135,10 +135,9 @@ def _fetch_all_ratings_for_daily(client: Any) -> list[dict[str, Any]]:
 
 
 def _store_label(r: dict) -> str:
-    """店舗表示用ラベル（store_name (store_code) または store_code）。"""
-    store_name = r.get("store_name") or ""
-    store_code = r.get("store_code", "")
-    return f"{store_name} ({store_code})" if store_name else store_code
+    """店舗表示用ラベル（store_code は出力しない。店舗名のみ）。"""
+    store_name = (r.get("store_name") or "").strip()
+    return store_name if store_name else "（店舗名なし）"
 
 
 def _delta_category(r: dict) -> str:
@@ -172,7 +171,19 @@ def _format_daily_summary_blocks(
     lines.append("*評価UP*")
     if up_list:
         for r in up_list:
-            lines.append(_store_label(r))
+            name = _store_label(r)
+            delta = _round1(r.get("delta_rating"))
+            current = _round1(r.get("rating_value"))
+            prev = None
+            if current is not None and delta is not None:
+                try:
+                    prev = round(float(current) - float(delta), 1)
+                except (TypeError, ValueError):
+                    pass
+            up_str = f"+{delta}" if delta is not None else "-"
+            cur_str = str(current) if current is not None else "-"
+            prev_str = str(prev) if prev is not None else "-"
+            lines.append(f"{name}: 上がり幅 {up_str}, 現状のGBP評価 {cur_str}, 以前のGBP評価 {prev_str}")
     else:
         lines.append("（なし）")
     lines.append("")
@@ -216,7 +227,7 @@ def _format_daily_summary_blocks(
             else ""
         )
         rating_display = rating if rating is not None else "-"
-        lines.append(f"{i}位: {label}: 評価 {rating_display}{delta_str}{rev_str}")
+        lines.append(f"{i}位: {label}: GBP評価 {rating_display}{delta_str}{rev_str}")
     text = "\n".join(lines)
     # Slack section は 3000 文字上限。超えたら前半で切る（通常は店舗数で超えない）
     if len(text) > 2900:
