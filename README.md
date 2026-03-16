@@ -34,7 +34,7 @@ Google Business Profile（GBP）のレビュー・評価を定点観測し、Big
 1. [infra/gcloud_commands.md](infra/gcloud_commands.md) の **§0 前提** を確認し、§1 以降を順に実施する。
 2. **BigQuery**: §2 でデータセット作成、§7 で `sql/001_create_tables.sql` と `sql/002_create_views.sql` を mart_gbp に適用（`YOUR_DATASET` → `mart_gbp` に置換）。
 3. **デプロイ用 SA と WIF**: §12・§13 を実施し、**GitHub Secrets** に `GCP_WIF_PROVIDER` と `GCP_WIF_SERVICE_ACCOUNT` を登録する。
-4. **GitHub Secrets** に以下も登録: `GCS_EXPORT_BUCKET`、`SHEET_ID`（必要なら `GCP_PROJECT_ID`）。
+4. **GitHub Secrets** に以下も登録: `GCS_EXPORT_BUCKET`、`SHEET_ID`（必要なら `SLACK_WEBHOOK_URL`、`GCP_PROJECT_ID`）。
 5. **Secret Manager**: §5.1 で `gbp-oauth-json` を作成し、実行 SA に secretAccessor を付与。OAuth JSON（client_id, client_secret, refresh_token）を `gcloud secrets versions add` で登録する。
 6. **スプレッドシート**: 書き込み先シートを **sa-review-observation-run@ikeuchi-data-sync.iam.gserviceaccount.com** に **編集者** で共有する。
 7. **places_provider_map**: BigQuery の `mart_gbp.places_provider_map` に 1 店舗以上を手動で INSERT する。**store_code** は店舗マスタ `ikeuchi-ga4.stg_freee_prd.dim_store` の **store_id** を文字列にした値（[docs/店舗マスタ参照.md](docs/店舗マスタ参照.md) 参照）。

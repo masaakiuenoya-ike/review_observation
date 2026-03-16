@@ -20,6 +20,7 @@ from . import bq_ops
 from . import gbp_oauth
 from . import gbp_reviews
 from . import sheets_writer
+from . import slack_notify
 
 app = Flask(__name__)
 
@@ -67,6 +68,7 @@ def run_ingest():
 
     print("[review_observation] fetching reviews for each place...", flush=True)
     rating_rows: list[dict] = []
+    star_counts_per_store: list[dict] = []  # Slack用: 今回の取込で増えた★1/★5件数
     errors = 0
 
     def _fetch_and_merge(
@@ -77,7 +79,8 @@ def run_ingest():
         provider_place_id: str,
         ingest_run_id: str,
         rating_rows: list[dict],
-    ) -> None:
+    ) -> tuple[int, int]:
+        """取得・MERGE を実行し、(今回の★1件数, 今回の★5件数) を返す。"""
         avg_rating, total_count, reviews = gbp_reviews.fetch_reviews_for_location(
             access_token, provider_place_id
         )
@@ -98,6 +101,9 @@ def run_ingest():
             reviews=reviews,
             ingest_run_id=ingest_run_id,
         )
+        count_1 = sum(1 for r in reviews if r.get("rating") == 1.0)
+        count_5 = sum(1 for r in reviews if r.get("rating") == 5.0)
+        return (count_1, count_5)
 
     for i, place in enumerate(places, 1):
         store_code = place["store_code"]
@@ -108,13 +114,16 @@ def run_ingest():
             f"[review_observation] place {i}/{len(places)} store_code={store_code}...", flush=True
         )
         try:
-            _fetch_and_merge(
+            c1, c5 = _fetch_and_merge(
                 access_token=access_token,
                 place=place,
                 store_code=store_code,
                 provider_place_id=provider_place_id,
                 ingest_run_id=ingest_run_id,
                 rating_rows=rating_rows,
+            )
+            star_counts_per_store.append(
+                {"store_code": store_code, "count_1star": c1, "count_5star": c5}
             )
         except requests.exceptions.HTTPError as e:
             if e.response is not None and e.response.status_code == 401:
@@ -127,13 +136,16 @@ def run_ingest():
                     access_token = gbp_oauth.get_gbp_access_token(
                         config.GBP_OAUTH_SECRET_NAME, config.GCP_PROJECT
                     )
-                    _fetch_and_merge(
+                    c1, c5 = _fetch_and_merge(
                         access_token=access_token,
                         place=place,
                         store_code=store_code,
                         provider_place_id=provider_place_id,
                         ingest_run_id=ingest_run_id,
                         rating_rows=rating_rows,
+                    )
+                    star_counts_per_store.append(
+                        {"store_code": store_code, "count_1star": c1, "count_5star": c5}
                     )
                 except Exception as retry_e:
                     errors += 1
@@ -154,6 +166,9 @@ def run_ingest():
                             "review_count": None,
                             "status": "error",
                         }
+                    )
+                    star_counts_per_store.append(
+                        {"store_code": store_code, "count_1star": 0, "count_5star": 0}
                     )
                     continue
             else:
@@ -176,6 +191,9 @@ def run_ingest():
                         "status": "error",
                     }
                 )
+                star_counts_per_store.append(
+                    {"store_code": store_code, "count_1star": 0, "count_5star": 0}
+                )
                 continue
         except Exception as e:
             errors += 1
@@ -197,6 +215,9 @@ def run_ingest():
                     "status": "error",
                 }
             )
+            star_counts_per_store.append(
+                {"store_code": store_code, "count_1star": 0, "count_5star": 0}
+            )
             # 店舗単位で status='error' を記録。全体は 200 を返す
             continue
 
@@ -210,9 +231,23 @@ def run_ingest():
         try:
             sheets_writer.write_latest_and_alerts()
             sheets_updated = True
-            print("[review_observation] Sheets LATEST/ALERT updated", flush=True)
+            print("[review_observation] Sheets LATEST/ALERT/サマリ updated", flush=True)
         except Exception as e:
-            print(f"[review_observation] Sheets update failed: {e}", file=sys.stderr)
+            print(
+                f"[review_observation] Sheets update failed: {e}",
+                file=sys.stderr,
+                flush=True,
+            )
+            import traceback
+            traceback.print_exc(file=sys.stderr)
+
+    if config.SLACK_WEBHOOK_URL:
+        try:
+            slack_notify.send_slack_notification(
+                snapshot_date.isoformat(), star_counts_per_store
+            )
+        except Exception as e:
+            print(f"[review_observation] Slack notification failed: {e}", file=sys.stderr)
 
     return jsonify(
         {

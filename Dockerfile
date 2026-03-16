@@ -12,4 +12,5 @@ ENV PYTHONPATH=/app
 ENV PORT=8080
 EXPOSE 8080
 
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "src.main:app"]
+# --timeout: 31店舗の取込は数分かかることがあるため 600 秒（Cloud Run のリクエストタイムアウトも 600 以上にすること）
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--timeout", "600", "src.main:app"]

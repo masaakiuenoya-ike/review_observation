@@ -404,6 +404,80 @@ gcloud scheduler jobs list --location=asia-northeast1
 gcloud scheduler jobs run review-observation-hourly --location=asia-northeast1
 ```
 
+### 10.7 実行状況の確認
+
+**ジョブ一覧（スケジュール・状態・最終実行時刻）**
+
+```bash
+gcloud config set project ikeuchi-data-sync
+gcloud scheduler jobs list --location=asia-northeast1 \
+  --format="table(name.basename(), schedule, state, lastAttemptTime)"
+```
+
+**特定ジョブの詳細（次回実行予定・最終実行結果など）**
+
+```bash
+gcloud scheduler jobs describe review-observation-hourly --location=asia-northeast1
+```
+
+**実行履歴（ログ）**
+
+- **コンソール**: [Cloud Scheduler](https://console.cloud.google.com/cloudscheduler?project=ikeuchi-data-sync) → ジョブを選択 → **「ログを表示」** で Logs Explorer が開く（実行開始・終了・成否が分かる）。
+- **CLI**: 直近の Scheduler 実行ログを引く例（プロジェクト要指定）:
+  ```bash
+  gcloud logging read 'resource.type="cloud_scheduler_job" resource.labels.job_id="review-observation-hourly"' \
+    --project=ikeuchi-data-sync --limit=20 --format="table(timestamp, severity, textPayload)"
+  ```
+
+### 10.8 実行状態報告（まとめて出力）
+
+認証済みのターミナルで以下を実行すると、報告用の実行状態がまとめて出力される。
+
+```bash
+# リポジトリルートで
+bash scripts/report_scheduler_status.sh
+```
+
+出力内容: ジョブ一覧（review_observation のみ）・各ジョブの詳細（state / lastAttemptTime / status）・ hourly の直近実行ログ。
+
+### 10.9 Scheduler は動いているが ratings_daily_snapshot に新しい日付が入らないとき
+
+**状況**: ジョブは ENABLED で lastAttemptTime も更新されているが、BQ の `ratings_daily_snapshot` は 3/12 など古い日付のまま。
+
+**原因の目安**: Scheduler は「呼び出し」しているが、**Cloud Run が 200 を返していない**（403 / 500 / タイムアウトなど）。その場合、アプリは完了まで到達せず、`merge_ratings_daily_snapshot` が実行されないため、その日の行が書き込まれない。
+
+**確認手順**
+
+1. **Scheduler ジョブの status**
+   ```bash
+   gcloud scheduler jobs describe review-observation-hourly --location=asia-northeast1 --format="yaml(status)"
+   ```
+   - `status.code: 0` → Cloud Run は 2xx を返している（別原因を疑う）。
+   - `status.code: 13`（INTERNAL）やその他 → Cloud Run がエラーまたはタイムアウトで応答している。
+
+2. **Cloud Run のログ**
+   - [Logs Explorer](https://console.cloud.google.com/logs/query?project=ikeuchi-data-sync) でプロジェクト `ikeuchi-data-sync` を選択。
+   - リソースで **Cloud Run リビジョン** を選び、`review-observation` を指定。
+   - 直近で `POST /` が来ている時間帯に、`[review_observation] POST / started` のあと `Sheets ... updated` や 200 が出ているか、それとも 500 やタイムアウトのエラーが出ているかを確認する。
+
+3. **よくある原因と対処**
+
+   | 原因 | 対処 |
+   |------|------|
+   | **403 Forbidden**（OIDC 認証） | Scheduler 用 SA に Cloud Run の **invoker** が付いているか確認。§10.1 の `run.invoker` 付与を再実行。 |
+   | **タイムアウト** | 31 店舗の取込は数分かかることがある。**Gunicorn** の worker タイムアウト（Dockerfile で `--timeout 600` に設定済み）と **Cloud Run** のリクエストタイムアウトの両方が必要。Cloud Run が 300 秒のままなら `gcloud run services update review-observation --region=asia-northeast1 --timeout=600` で 600 秒に延長する。 |
+   | **500 Internal Server Error** | ログのスタックトレースを確認（BQ / Secret Manager / GBP API のエラー）。ADC や OAuth トークン期限など。 |
+
+4. **手動実行で確認**
+   ```bash
+   gcloud scheduler jobs run review-observation-hourly --location=asia-northeast1
+   ```
+   実行直後に Logs Explorer で `review-observation` のログを「ストリーミング」または直近 5 分で見ると、POST / の成否が分かる。
+
+**補足**: `status.code: 13` は、Cloud Run が 5xx を返した場合や、接続がタイムアウトした場合などに付く。まず Cloud Run のログで実際の HTTP ステータスとエラー内容を確認する。
+
+**500 かつ latency が約 30 秒で gunicorn handle_abort / job.result(timeout=...) のトレースバック**: Gunicorn の **worker タイムアウト**（デフォルト 30 秒）でリクエストが打ち切られている。Dockerfile で `--timeout 600` を指定して再デプロイし、Cloud Run のリクエストタイムアウトも 600 秒にすること。
+
 ---
 
 ## 11. Sheets 書き込み権限
@@ -413,7 +487,7 @@ gcloud scheduler jobs run review-observation-hourly --location=asia-northeast1
 
 ### 11.1 実施手順（スプレッドシートを runtime SA に共有）
 
-1. 書き込み先にする Google スプレッドシートを開く（LATEST / ALERT タブをアプリが更新する想定）。
+1. 書き込み先にする Google スプレッドシートを開く（LATEST / ALERT / サマリ タブをアプリが更新する想定）。
 2. 右上の **「共有」** をクリック。
 3. **ユーザーやグループを追加** の欄に、次のメールアドレスを入力する（コピー＆ペースト可）:
    ```

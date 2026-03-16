@@ -6,6 +6,7 @@
 #   GCP_WIF_SERVICE_ACCOUNT - デプロイ用 SA（例: sa-review-observation-deploy@ikeuchi-data-sync.iam.gserviceaccount.com）
 #   GCS_EXPORT_BUCKET       - CSV 出力用 GCS バケット名（Cloud Run の環境変数に渡す）
 #   SHEET_ID                - 書き込み先 Google スプレッドシートの ID（Cloud Run の環境変数に渡す）
+# 任意: SLACK_WEBHOOK_URL（Incoming Webhook URL。設定時のみ Cloud Run に渡し、取込後に Slack 通知）
 # 任意: GCP_PROJECT_ID（未設定時は ikeuchi-data-sync を使用）
 
 name: Deploy to Cloud Run
@@ -132,6 +133,7 @@ jobs:
         env:
           SHEET_ID: ${{ secrets.SHEET_ID }}
           GCS_EXPORT_BUCKET: ${{ secrets.GCS_EXPORT_BUCKET }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
           set -e
           IMAGE_URI="${{ needs.build-push.outputs.image_uri }}"
@@ -143,6 +145,7 @@ jobs:
           EXTRA_ENV=""
           [ -n "${SHEET_ID}" ] && EXTRA_ENV="${EXTRA_ENV} --set-env-vars=SHEET_ID=${SHEET_ID}"
           [ -n "${GCS_EXPORT_BUCKET}" ] && EXTRA_ENV="${EXTRA_ENV} --set-env-vars=GCS_EXPORT_BUCKET=${GCS_EXPORT_BUCKET}"
+          [ -n "${SLACK_WEBHOOK_URL}" ] && EXTRA_ENV="${EXTRA_ENV} --set-env-vars=SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}"
           gcloud run deploy ${{ env.SERVICE_NAME }} \
             --image="$IMAGE_URI" \
             --region=${{ env.REGION }} \

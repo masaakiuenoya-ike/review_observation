@@ -1,6 +1,6 @@
 """
 BigQuery VIEW（v_latest_with_delta_ratings / v_rating_alerts）を参照し、
-Google Sheets の LATEST / ALERT タブを全置換する。
+Google Sheets の LATEST / ALERT / サマリ タブを更新する。
 """
 
 from __future__ import annotations
@@ -68,6 +68,52 @@ def _fetch_view(client: Any, view_name: str, columns: list[str]) -> list[list[An
     return _rows_from_bq_result(columns, rows)
 
 
+def _fetch_summary_rows(client: Any) -> list[list[Any]]:
+    """サマリタブ用: 全体集計とアラート内訳を BQ から取得し、行のリストで返す。"""
+    ds = config.BQ_DATASET
+    project = config.BQ_PROJECT
+    # 全体サマリ（今日の v_latest から）
+    q_summary = f"""
+    SELECT
+      MAX(snapshot_date) AS snapshot_date,
+      COUNT(*) AS store_count,
+      ROUND(AVG(rating_value), 2) AS avg_rating,
+      SUM(review_count) AS total_reviews
+    FROM `{project}.{ds}.v_latest_with_delta_ratings`
+    WHERE status = 'ok'
+    """
+    job = client.query(q_summary)
+    summary_row = next(iter(job.result(timeout=60)), None)
+    # アラート内訳
+    q_alerts = f"""
+    SELECT alert_type, COUNT(*) AS cnt
+    FROM `{project}.{ds}.v_rating_alerts`
+    GROUP BY alert_type
+    ORDER BY alert_type
+    """
+    job_alerts = client.query(q_alerts)
+    alert_rows = [dict(r) for r in job_alerts.result(timeout=60)]
+    # サマリタブの行構成
+    out: list[list[Any]] = []
+    out.append(["更新日", "店舗数", "平均評価", "総レビュー数"])
+    if summary_row:
+        out.append([
+            _cell_value(summary_row.get("snapshot_date")),
+            summary_row.get("store_count"),
+            summary_row.get("avg_rating"),
+            summary_row.get("total_reviews"),
+        ])
+    else:
+        out.append(["", 0, "", 0])
+    out.append([])
+    out.append(["アラート種別", "件数"])
+    for r in alert_rows:
+        out.append([r.get("alert_type", ""), r.get("cnt", 0)])
+    if not alert_rows:
+        out.append(["（なし）", 0])
+    return out
+
+
 def _get_sheets_service():
     """Application Default Credentials で Sheets API クライアントを返す。"""
     from google.auth import default
@@ -76,6 +122,27 @@ def _get_sheets_service():
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
     credentials, _ = default(scopes=scopes)
     return build("sheets", "v4", credentials=credentials)
+
+
+def _ensure_tabs_exist(service: Any, sheet_id: str) -> None:
+    """LATEST / ALERT / サマリ タブが無ければ作成する。"""
+    meta = (
+        service.spreadsheets()
+        .get(spreadsheetId=sheet_id, fields="sheets(properties(title))")
+        .execute()
+    )
+    existing = {s["properties"]["title"] for s in meta.get("sheets", [])}
+    required = {config.SHEET_TAB_LATEST, config.SHEET_TAB_ALERT, config.SHEET_TAB_SUMMARY}
+    missing = required - existing
+    if not missing:
+        return
+    requests = [
+        {"addSheet": {"properties": {"title": title}}} for title in sorted(missing)
+    ]
+    service.spreadsheets().batchUpdate(
+        spreadsheetId=sheet_id,
+        body={"requests": requests},
+    ).execute()
 
 
 def _clear_and_update(sheet_id: str, tab_name: str, rows: list[list[Any]]) -> None:
@@ -102,13 +169,24 @@ def _clear_and_update(sheet_id: str, tab_name: str, rows: list[list[Any]]) -> No
 
 def write_latest_and_alerts() -> None:
     """
-    SHEET_ID が設定されていれば、v_latest_with_delta_ratings → LATEST タブ、
-    v_rating_alerts → ALERT タブを全置換する。未設定なら何もしない。
+    SHEET_ID が設定されていれば、v_latest_with_delta_ratings → LATEST、
+    v_rating_alerts → ALERT、集計 → サマリ タブを全置換する。未設定なら何もしない。
+    必要なタブが無い場合は自動作成する。
     """
     if not config.SHEET_ID:
+        import sys
+        print(
+            "[review_observation] Sheets skip: SHEET_ID not set",
+            file=sys.stderr,
+            flush=True,
+        )
         return
+    service = _get_sheets_service()
+    _ensure_tabs_exist(service, config.SHEET_ID)
     client = bq_ops.get_client()
     latest_rows = _fetch_view(client, "v_latest_with_delta_ratings", LATEST_COLUMNS)
     alert_rows = _fetch_view(client, "v_rating_alerts", ALERT_COLUMNS)
+    summary_rows = _fetch_summary_rows(client)
     _clear_and_update(config.SHEET_ID, config.SHEET_TAB_LATEST, latest_rows)
     _clear_and_update(config.SHEET_ID, config.SHEET_TAB_ALERT, alert_rows)
+    _clear_and_update(config.SHEET_ID, config.SHEET_TAB_SUMMARY, summary_rows)

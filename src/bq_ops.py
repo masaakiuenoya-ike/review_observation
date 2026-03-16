@@ -194,7 +194,7 @@ def merge_reviews(
         ]
         job = client.query(sql, job_config=bigquery.QueryJobConfig(query_parameters=params))
         try:
-            job.result(timeout=30)
+            job.result(timeout=90)
         except Exception as e:
             import sys
 
