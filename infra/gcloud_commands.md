@@ -408,14 +408,14 @@ gcloud scheduler jobs create http review-observation-daily \
 gcloud scheduler jobs update http review-observation-daily --location=asia-northeast1 --attempt-deadline=1800s
 ```
 
-### 10.4b 日次 Slack サマリ（毎日 9:00 JST・1日1回各店舗の評価・前日比を通知）
+### 10.4b 日次 Slack サマリ（毎日 9:15 JST・sheets-update の後に実行）
 
-取込は行わず、BQ の直近データを元に各店舗の評価・前日比を Slack に送る。
+取込は行わず、BQ の直近データを元に各店舗の評価・前日比を Slack に送る。**review-observation-sheets-update**（09:10）の **5分後** に実行する想定。
 
 ```bash
 gcloud scheduler jobs create http review-observation-daily-slack \
   --location="${REGION}" \
-  --schedule="0 9 * * *" \
+  --schedule="15 9 * * *" \
   --time-zone="Asia/Tokyo" \
   --uri="${RUN_URL}/daily-summary" \
   --http-method=POST \
@@ -425,7 +425,7 @@ gcloud scheduler jobs create http review-observation-daily-slack \
   --message-body="{}"
 ```
 
-- **SLACK_WEBHOOK_URL** が Cloud Run の環境変数／Secret に設定されている必要がある。
+- **SLACK_WEBHOOK_URL** が Cloud Run の環境変数に設定されている必要がある。取得・設定手順は [docs/Slack連携.md](../docs/Slack連携.md) を参照。
 - 応答は BQ 参照＋Slack 送信のみのため、attempt-deadline はデフォルト（180s）でよい。
 
 ### 10.5 月次ジョブ（毎月1日 09:00 JST）
@@ -454,12 +454,12 @@ curl -X POST -H "Authorization: Bearer $(gcloud auth print-identity-token --audi
   https://review-observation-XXXX.run.app/sheets-update
 ```
 
-Scheduler で毎時 :20 に実行する例（:00 の取込のあとシートだけ確実に更新したい場合）:
+Scheduler で **1日1回（09:10 JST）** 実行する例。更新の **5分後** に **review-observation-daily-slack**（09:15 JST）で Slack に日次サマリを送る想定:
 
 ```bash
 gcloud scheduler jobs create http review-observation-sheets-update \
   --location=asia-northeast1 \
-  --schedule="20 * * * *" \
+  --schedule="10 9 * * *" \
   --time-zone="Asia/Tokyo" \
   --uri="${RUN_URL}/sheets-update" \
   --http-method=POST \
@@ -470,6 +470,7 @@ gcloud scheduler jobs create http review-observation-sheets-update \
 ```
 
 - **SHEET_ID** が Cloud Run に設定されている必要がある。未設定の場合は 400 を返す。
+- 運用: 毎日 **09:00** 取込（daily）→ **09:10** sheets-update → **09:15** daily-slack（Slack 連携）。
 
 ### 10.6 ジョブ一覧・手動実行
 
