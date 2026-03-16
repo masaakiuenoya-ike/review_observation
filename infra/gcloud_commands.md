@@ -362,6 +362,11 @@ gcloud scheduler jobs create http review-observation-hourly \
 
 - `0 * * * *` = 毎時 0 分（1日 24 回）。
 - 既に同名ジョブがある場合は `gcloud scheduler jobs delete review-observation-hourly --location=${REGION}` で削除してから再作成。
+- 取込に数分かかるため、**attemptDeadline** を 1200 秒に延長すること（デフォルト 180 秒だと code: 4 タイムアウトになる）。deploy.yml で Cloud Run は `--timeout=1200` を指定済み:
+  ```bash
+  gcloud scheduler jobs update http review-observation-hourly --location=asia-northeast1 --attempt-deadline=1200s
+  gcloud scheduler jobs update http review-observation-daily --location=asia-northeast1 --attempt-deadline=1200s
+  ```
 
 ### 10.4 日次ジョブ（毎日 09:00 JST・任意）
 
@@ -453,7 +458,8 @@ bash scripts/report_scheduler_status.sh
    gcloud scheduler jobs describe review-observation-hourly --location=asia-northeast1 --format="yaml(status)"
    ```
    - `status.code: 0` → Cloud Run は 2xx を返している（別原因を疑う）。
-   - `status.code: 13`（INTERNAL）やその他 → Cloud Run がエラーまたはタイムアウトで応答している。
+   - `status.code: 4`（DEADLINE_EXCEEDED）→ Scheduler が応答を待つ時間（attemptDeadline、デフォルト 180 秒）を超えた。Cloud Run のタイムアウトと Scheduler の `--attempt-deadline=600s` を両方延長する。
+   - `status.code: 13`（INTERNAL）→ Cloud Run がエラーまたはタイムアウトで応答している。
 
 2. **Cloud Run のログ**
    - [Logs Explorer](https://console.cloud.google.com/logs/query?project=ikeuchi-data-sync) でプロジェクト `ikeuchi-data-sync` を選択。
@@ -465,7 +471,7 @@ bash scripts/report_scheduler_status.sh
    | 原因 | 対処 |
    |------|------|
    | **403 Forbidden**（OIDC 認証） | Scheduler 用 SA に Cloud Run の **invoker** が付いているか確認。§10.1 の `run.invoker` 付与を再実行。 |
-   | **タイムアウト** | 31 店舗の取込は数分かかることがある。**Gunicorn** の worker タイムアウト（Dockerfile で `--timeout 600` に設定済み）と **Cloud Run** のリクエストタイムアウトの両方が必要。Cloud Run が 300 秒のままなら `gcloud run services update review-observation --region=asia-northeast1 --timeout=600` で 600 秒に延長する。 |
+   | **タイムアウト** | 31 店舗の取込は数分かかることがある。**Gunicorn**（Dockerfile で `--timeout 600`）、**Cloud Run**（deploy で `--timeout=1200`）、**Scheduler**（`--attempt-deadline=1200s`）の 3 つを揃える。手動で延長する場合は `gcloud run services update review-observation --region=asia-northeast1 --timeout=1200` と Scheduler の attempt-deadline。 |
    | **500 Internal Server Error** | ログのスタックトレースを確認（BQ / Secret Manager / GBP API のエラー）。ADC や OAuth トークン期限など。 |
 
 4. **手動実行で確認**

@@ -112,6 +112,10 @@ def merge_ratings_daily_snapshot(
         job.result(timeout=60)
 
 
+# 1 店舗あたりのレビューを何件ずつまとめて MERGE するか（BQ パラメータ上限を避ける）
+_REVIEW_BATCH_SIZE = 80
+
+
 def merge_reviews(
     store_code: str,
     provider: str,
@@ -119,39 +123,52 @@ def merge_reviews(
     reviews: list[dict[str, Any]],
     ingest_run_id: str,
 ) -> None:
-    """reviews に MERGE（store_code + provider + provider_review_id）。"""
-    if not reviews:
+    """reviews に MERGE（store_code + provider + provider_review_id）。店舗単位で UNNEST 一括 MERGE。"""
+    valid = [r for r in reviews if r.get("provider_review_id")]
+    if not valid:
         return
     client = get_client()
     ds = config.BQ_DATASET
     table = f"{config.BQ_PROJECT}.{ds}.reviews"
-    # 簡易: 1 件ずつ MERGE（大量の場合は UNNEST で一括推奨）
-    total = len([r for r in reviews if r.get("provider_review_id")])
+    total = len(valid)
     if total > 10:
         import sys
 
         print(
-            f"[bq_ops] merge_reviews store={store_code} merging {total} reviews...", file=sys.stderr
+            f"[bq_ops] merge_reviews store={store_code} merging {total} reviews (batch)...",
+            file=sys.stderr,
         )
-    merged = 0
-    for rev in reviews:
-        rid = rev.get("provider_review_id") or ""
-        if not rid:
-            continue
-        merged += 1
+    for offset in range(0, total, _REVIEW_BATCH_SIZE):
+        batch = valid[offset : offset + _REVIEW_BATCH_SIZE]
+        ids = [r.get("provider_review_id", "") for r in batch]
+        ratings = [r.get("rating") for r in batch]
+        texts = [(r.get("review_text") or "")[: 2**16 - 1] for r in batch]
+        created = [r.get("review_created_at") for r in batch]
+        updated = [r.get("review_updated_at") for r in batch]
+        names = [r.get("reviewer_display_name") or "" for r in batch]
         sql = f"""
         MERGE `{table}` AS T
-        USING (SELECT
-            @store_code AS store_code,
-            @provider AS provider,
-            @provider_place_id AS provider_place_id,
-            @provider_review_id AS provider_review_id,
-            @rating AS rating,
-            @review_text AS review_text,
-            @review_created_at AS review_created_at,
-            @review_updated_at AS review_updated_at,
-            @reviewer_display_name AS reviewer_display_name,
-            @ingest_run_id AS ingest_run_id
+        USING (
+            SELECT
+                @store_code AS store_code,
+                @provider AS provider,
+                @provider_place_id AS provider_place_id,
+                i.rid AS provider_review_id,
+                i.r AS rating,
+                i.rt AS review_text,
+                i.rc AS review_created_at,
+                i.ru AS review_updated_at,
+                i.rn AS reviewer_display_name,
+                @ingest_run_id AS ingest_run_id
+            FROM (
+                SELECT rid, r, rt, rc, ru, rn FROM
+                UNNEST(@ids) AS rid WITH OFFSET pos
+                JOIN UNNEST(@ratings) AS r WITH OFFSET pos2 ON pos = pos2
+                JOIN UNNEST(@texts) AS rt WITH OFFSET pos3 ON pos = pos3
+                JOIN UNNEST(@created) AS rc WITH OFFSET pos4 ON pos = pos4
+                JOIN UNNEST(@updated) AS ru WITH OFFSET pos5 ON pos = pos5
+                JOIN UNNEST(@names) AS rn WITH OFFSET pos6 ON pos = pos6
+            ) AS i
         ) AS S
         ON T.store_code = S.store_code AND T.provider = S.provider AND T.provider_review_id = S.provider_review_id
         WHEN MATCHED THEN UPDATE SET
@@ -172,41 +189,35 @@ def merge_reviews(
             CURRENT_TIMESTAMP(), S.ingest_run_id
         )
         """
-        params = [
-            bigquery.ScalarQueryParameter("store_code", "STRING", store_code),
-            bigquery.ScalarQueryParameter("provider", "STRING", provider),
-            bigquery.ScalarQueryParameter("provider_place_id", "STRING", provider_place_id),
-            bigquery.ScalarQueryParameter("provider_review_id", "STRING", rid),
-            bigquery.ScalarQueryParameter("rating", "FLOAT64", rev.get("rating")),
-            bigquery.ScalarQueryParameter(
-                "review_text", "STRING", (rev.get("review_text") or "")[: 2**16 - 1]
-            ),
-            bigquery.ScalarQueryParameter(
-                "review_created_at", "TIMESTAMP", rev.get("review_created_at")
-            ),
-            bigquery.ScalarQueryParameter(
-                "review_updated_at", "TIMESTAMP", rev.get("review_updated_at")
-            ),
-            bigquery.ScalarQueryParameter(
-                "reviewer_display_name", "STRING", rev.get("reviewer_display_name")
-            ),
-            bigquery.ScalarQueryParameter("ingest_run_id", "STRING", ingest_run_id),
-        ]
-        job = client.query(sql, job_config=bigquery.QueryJobConfig(query_parameters=params))
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("store_code", "STRING", store_code),
+                bigquery.ScalarQueryParameter("provider", "STRING", provider),
+                bigquery.ScalarQueryParameter("provider_place_id", "STRING", provider_place_id),
+                bigquery.ScalarQueryParameter("ingest_run_id", "STRING", ingest_run_id),
+                bigquery.ArrayQueryParameter("ids", "STRING", ids),
+                bigquery.ArrayQueryParameter("ratings", "FLOAT64", ratings),
+                bigquery.ArrayQueryParameter("texts", "STRING", texts),
+                bigquery.ArrayQueryParameter("created", "TIMESTAMP", created),
+                bigquery.ArrayQueryParameter("updated", "TIMESTAMP", updated),
+                bigquery.ArrayQueryParameter("names", "STRING", names),
+            ]
+        )
+        job = client.query(sql, job_config=job_config)
         try:
-            job.result(timeout=90)
+            job.result(timeout=120)
         except Exception as e:
             import sys
 
             print(
-                f"[bq_ops] merge_reviews store={store_code} review {merged}/{total} failed: {e}",
+                f"[bq_ops] merge_reviews store={store_code} batch failed: {e}",
                 file=sys.stderr,
             )
             raise
-        if total > 10 and merged % 10 == 0:
+        if total > 10 and (offset + len(batch)) % 50 == 0:
             import sys
 
             print(
-                f"[bq_ops] merge_reviews store={store_code} progress {merged}/{total}",
+                f"[bq_ops] merge_reviews store={store_code} progress {offset + len(batch)}/{total}",
                 file=sys.stderr,
             )
