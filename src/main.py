@@ -65,6 +65,12 @@ def run_daily_summary():
     全体を DAILY_SUMMARY_TIMEOUT_SEC で打ち切り、必ず HTTP レスポンスを返す。
     """
     print("[review_observation] POST /daily-summary started", flush=True)
+    if not config.SLACK_WEBHOOK_URL:
+        print("[review_observation] SLACK_WEBHOOK_URL not set; skipping Slack", flush=True)
+        return (
+            jsonify({"ok": True, "message": "skipped (SLACK_WEBHOOK_URL not set)"}),
+            200,
+        )
     with ThreadPoolExecutor(max_workers=1) as ex:
         future = ex.submit(slack_notify.send_daily_summary)
         try:

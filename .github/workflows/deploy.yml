@@ -142,10 +142,14 @@ jobs:
             echo "Using fallback IMAGE_URI (image_uri output was empty)"
           fi
           echo "Deploying image (sha): ${{ github.sha }}"
+          echo "SLACK_WEBHOOK_URL is set: $([ -n \"${SLACK_WEBHOOK_URL}\" ] && echo yes || echo no)"
           EXTRA_ENV=""
           [ -n "${SHEET_ID}" ] && EXTRA_ENV="${EXTRA_ENV} --set-env-vars=SHEET_ID=${SHEET_ID}"
           [ -n "${GCS_EXPORT_BUCKET}" ] && EXTRA_ENV="${EXTRA_ENV} --set-env-vars=GCS_EXPORT_BUCKET=${GCS_EXPORT_BUCKET}"
-          [ -n "${SLACK_WEBHOOK_URL}" ] && EXTRA_ENV="${EXTRA_ENV} --set-env-vars=SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}"
+          if [ -n "${SLACK_WEBHOOK_URL}" ]; then
+            echo "SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}" > env_extra.env
+            EXTRA_ENV="${EXTRA_ENV} --env-vars-file=env_extra.env"
+          fi
           gcloud run deploy ${{ env.SERVICE_NAME }} \
             --image="$IMAGE_URI" \
             --region=${{ env.REGION }} \
