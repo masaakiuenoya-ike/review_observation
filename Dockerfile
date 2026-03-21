@@ -12,5 +12,8 @@ ENV PYTHONPATH=/app
 ENV PORT=8080
 EXPOSE 8080
 
-# --timeout: 31店舗の取込は数分かかることがあるため 600 秒（Cloud Run のリクエストタイムアウトも 600 以上にすること）
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--timeout", "600", "src.main:app"]
+# --workers: 1 のとき、長時間の POST /（取込）が唯一のワーカーを占有し、
+#   同時に届く GET /health（ウォームアップ）や POST /daily-summary がキューで待ち続け 504 になる。
+#   2 以上にして取込と軽いエンドポイントを並行処理する（Cloud Run のリクエストタイムアウト 3600s に合わせる）。
+# --timeout: ワーカーが応答しない秒数。取込が 1 時間かかる場合があるため 3600。
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "2", "--timeout", "3600", "src.main:app"]

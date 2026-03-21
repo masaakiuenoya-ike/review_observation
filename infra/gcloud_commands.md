@@ -412,6 +412,8 @@ gcloud scheduler jobs update http review-observation-daily --location=asia-north
 
 取込は行わず、BQ の直近データを元に各店舗の評価・前日比を Slack に送る。**review-observation-sheets-update**（09:10）の **5分後** に実行する想定。
 
+**定期実行の認証**: Scheduler は **OIDC** で `oidc-token-audience="${RUN_URL}"`（サービス URL）を指定しているため、認証は正しく設定されている。ログで **504** になる場合は認証ではなく **タイムアウト**（コールドスタートや処理時間）。**000** は手動 curl 側でリクエストが Cloud Run に届いていない場合に多い。
+
 ```bash
 gcloud scheduler jobs create http review-observation-daily-slack \
   --location="${REGION}" \
@@ -427,6 +429,87 @@ gcloud scheduler jobs create http review-observation-daily-slack \
 
 - **SLACK_WEBHOOK_URL** が Cloud Run の環境変数に設定されている必要がある。取得・設定手順は [docs/Slack連携.md](../docs/Slack連携.md) を参照。
 - 応答は BQ 参照＋Slack 送信のみのため、attempt-deadline はデフォルト（180s）でよい。
+
+### 10.4c 日次 Slack 用ウォームアップ（毎日 09:10 JST）
+
+09:15 の daily-slack の **5 分前に** GET /health を叩き、Cloud Run をウォームにしておく。コールドスタートによる 000 や code 4 を防ぐ。
+
+```bash
+# 10.4b と同様に REGION, SCHEDULER_SA, RUN_URL を設定済みとして
+gcloud scheduler jobs create http review-observation-daily-slack-warmup \
+  --location="${REGION}" \
+  --schedule="10 9 * * *" \
+  --time-zone="Asia/Tokyo" \
+  --uri="${RUN_URL}/health" \
+  --http-method=GET \
+  --oidc-service-account-email="${SCHEDULER_SA}" \
+  --oidc-token-audience="${RUN_URL}"
+```
+
+- 既に同名ジョブがある場合は `gcloud scheduler jobs delete review-observation-daily-slack-warmup --location=${REGION}` で削除してから再作成。
+- 実行順: **09:10** warmup（GET /health）→ **09:15** daily-slack（POST /daily-summary）。
+
+**手動で Slack 日次サマリを送る（本日分の実行）**  
+**前提**: 手動実行するユーザーに Cloud Run の **run.invoker** が必要。未付与だと 403 や 000 になる。付与は下記「Cloud Shell から〜（invoker 未付与）」のコマンドで行う。
+
+**認証（トークン）**: 過去の成功例では、手元で **`gcloud auth print-identity-token`（--audiences なし）** で 200 が返っている。環境により `--audiences="$URL"` が必要な場合があるため、**まず audiences なし** を試し、000/403 なら **--audiences="$URL"** を付けて取得する。スクリプト `scripts/run_daily_summary_manual.sh` はその順で試す。
+
+- **推奨: ポーリングで実行**: GET /health が **200 が返るまで** リトライしてから POST /daily-summary を実行する。
+  ```bash
+  bash scripts/run_daily_summary_manual.sh
+  ```
+  環境変数: `POLL_TIMEOUT=30`, `POLL_INTERVAL=10`, `POLL_MAX=60`, `DAILY_TIMEOUT=600`。
+- **手順（コマンド 2 本）**: 以下のブロックをそのまま実行する（1 → 2 の順）。トークンは上記のとおり audiences なしで試し、000 なら --audiences="$URL" を付ける。
+- **HTTP: 000 が続く場合**: invoker 付与、ウォームアップ＋ポーリング、min-instances=1 を [docs/Slack連携.md §4](../docs/Slack連携.md#4-トラブルシュート) で確認。
+
+```bash
+URL=$(gcloud run services describe review-observation --region=asia-northeast1 --format='value(status.url)')
+# 過去成功例: 手元では audiences なしで 200。Cloud Shell で 000 のときは --audiences="$URL" を付与
+TOKEN=$(gcloud auth print-identity-token)
+
+# 1. ウォームアップ（GET /health）。000 なら繰り返し叩くか run_daily_summary_manual.sh を使用
+curl -s -w "\nHTTP: %{http_code}\n" --max-time 120 -H "Authorization: Bearer $TOKEN" "$URL/health"
+
+# 2. 本日分の日次サマリを送る（POST /daily-summary）
+curl -s -w "\nHTTP: %{http_code}\n" --max-time 600 -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{}' "$URL/daily-summary"
+```
+
+**手動実行で HTTP 000 かつログにリクエストが出ない場合（原因とメカニズム）**
+
+- **エンドポイント**: `gcloud run services describe` で取得した URL で正しい。Scheduler の 504 ログも同じ URL に対して記録されている。
+- **メカニズム**: **HTTP 000** は「サーバから 1 バイトも受信していない」状態。コールドスタートは [検証記事](https://zenn.dev/cloud_ace/articles/8b32d253540b85) のとおり数秒程度が一般的で、数分かかることは通常考えにくい。
+- **届いていない理由の候補**: (1) 手元環境から `*.run.app` への通信がブロックされている、(2) **Cloud Shell からでも 000 の場合は「呼び出し権限」**（下記）。
+
+**Cloud Shell から実行しても HTTP 000 になる場合（invoker 未付与）**
+
+Cloud Run は **認証必須** で、デフォルトでは **Scheduler 用 SA だけ** `roles/run.invoker` を持っている。Cloud Shell で `gcloud auth print-identity-token` で得るトークンは **あなたのユーザー identity** のため、**あなたに invoker が無いとリクエストが拒否される**。そのとき、状況によってはクライアントに **HTTP 000**（または 403）となる。
+
+**対処: 手動実行するユーザーに invoker を付与してから、Cloud Shell で同じ curl を再実行する。**
+
+```bash
+# 現在の Cloud Shell / gcloud のユーザーに Cloud Run の呼び出し権限を付与
+gcloud run services add-iam-policy-binding review-observation \
+  --region=asia-northeast1 \
+  --member="user:$(gcloud config get-value account)" \
+  --role="roles/run.invoker"
+```
+
+上記のあと、Cloud Shell で実行する。トークンは **まず `gcloud auth print-identity-token`（audiences なし）** を試し、000/403 のときだけ **`--audiences="$URL"`** を付けて取得する（環境によりどちらが有効か異なる）。
+
+```bash
+URL=$(gcloud run services describe review-observation --region=asia-northeast1 --format='value(status.url)')
+TOKEN=$(gcloud auth print-identity-token)
+# 000 のとき: TOKEN=$(gcloud auth print-identity-token --audiences="$URL")
+curl -s -w "\nHTTP: %{http_code}\n" --max-time 60 -H "Authorization: Bearer $TOKEN" "$URL/health"
+```
+
+- **200** が返ればサービスは正常。000 や 403 が続く場合は、直近のログで該当時刻にリクエストや 403 が出ているか確認する。
+- **ログで「届いたリクエスト」だけ見る**:
+  ```bash
+  gcloud logging read 'resource.type="cloud_run_revision" resource.labels.service_name="review-observation" httpRequest.requestUrl!=""' \
+    --project=ikeuchi-data-sync --limit=20 --format="table(timestamp,httpRequest.requestMethod,httpRequest.requestUrl,httpRequest.status)" --freshness=2h
+  ```
+  手動実行の時刻にここに 1 件も出ていなければ、そのリクエストは Cloud Run に到達していない。
 
 ### 10.5 月次ジョブ（毎月1日 09:00 JST）
 ```bash
@@ -543,7 +626,8 @@ bash scripts/report_scheduler_status.sh
    | 原因 | 対処 |
    |------|------|
    | **403 Forbidden**（OIDC 認証） | Scheduler 用 SA に Cloud Run の **invoker** が付いているか確認。§10.1 の `run.invoker` 付与を再実行。 |
-   | **タイムアウト** | 31 店舗の取込は数分かかることがある。**Gunicorn**（Dockerfile で `--timeout 600`）、**Cloud Run**（deploy で `--timeout=1200`）、**Scheduler**（`--attempt-deadline=1200s`）の 3 つを揃える。手動で延長する場合は `gcloud run services update review-observation --region=asia-northeast1 --timeout=1200` と Scheduler の attempt-deadline。 |
+   | **タイムアウト** | 31 店舗の取込は長時間かかることがある。**Gunicorn**（Dockerfile で `--timeout 3600`）、**Cloud Run**（deploy で `--timeout=3600`）、**Scheduler**（`--attempt-deadline=1800s` など）を揃える。 |
+   | **GET /health や /daily-summary が 504（取込と同時刻）** | Gunicorn **`--workers 1`** のとき、POST /（取込）がワーカーを占有し、ウォームアップ・日次 Slack がキューで待ち続け 504 になる。**Dockerfile で `--workers 2` 以上**にする（本リポジトリで対応済み）。 |
    | **500 Internal Server Error** | ログのスタックトレースを確認（BQ / Secret Manager / GBP API のエラー）。ADC や OAuth トークン期限など。 |
 
 4. **手動実行で確認**
@@ -554,7 +638,9 @@ bash scripts/report_scheduler_status.sh
 
 **補足**: `status.code: 13` は、Cloud Run が 5xx を返した場合や、接続がタイムアウトした場合などに付く。まず Cloud Run のログで実際の HTTP ステータスとエラー内容を確認する。
 
-**500 かつ latency が約 30 秒で gunicorn handle_abort / job.result(timeout=...) のトレースバック**: Gunicorn の **worker タイムアウト**（デフォルト 30 秒）でリクエストが打ち切られている。Dockerfile で `--timeout 600` を指定して再デプロイし、Cloud Run のリクエストタイムアウトも 600 秒にすること。
+**500 かつ latency が約 30 秒で gunicorn handle_abort / job.result(timeout=...) のトレースバック**: Gunicorn の **worker タイムアウト**でリクエストが打ち切られている。Dockerfile で `--timeout 3600`（取込と Cloud Run の 3600s に合わせる）を指定して再デプロイする。
+
+**GET /health・POST /daily-summary が毎回 504 かつ hourly と同時刻**: **ワーカー 1 本**で取込が長時間ブロックしている可能性が高い。`--workers 2` 以上で再デプロイする。
 
 ### 10.10 v_latest_with_delta_performance が更新されない／空のとき
 
