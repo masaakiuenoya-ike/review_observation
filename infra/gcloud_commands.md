@@ -447,6 +447,10 @@ gcloud scheduler jobs create http review-observation-daily-slack-warmup \
 ```
 
 - 既に同名ジョブがある場合は `gcloud scheduler jobs delete review-observation-daily-slack-warmup --location=${REGION}` で削除してから再作成。
+- 作成後、**attempt-deadline を 600s** に延長する（デフォルト 180s だとコールド時に不足することがある）。
+  ```bash
+  gcloud scheduler jobs update http review-observation-daily-slack-warmup --location="${REGION}" --attempt-deadline=600s
+  ```
 - 実行順: **09:10** warmup（GET /health）→ **09:15** daily-slack（POST /daily-summary）。
 
 **手動で Slack 日次サマリを送る（本日分の実行）**  
