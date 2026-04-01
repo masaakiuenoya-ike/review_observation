@@ -7,18 +7,12 @@ from src import review_summary
 
 def test_maybe_send_disabled():
     with mock.patch.object(review_summary.config, "REVIEW_SUMMARY_ENABLED", False):
-        assert (
-            review_summary.maybe_send_after_ingest("2026-01-01", "run-1", [])
-            == "disabled"
-        )
+        assert review_summary.maybe_send_after_ingest("2026-01-01", "run-1", []) == "disabled"
 
 
 def test_maybe_send_no_new():
     with mock.patch.object(review_summary.config, "REVIEW_SUMMARY_ENABLED", True):
-        assert (
-            review_summary.maybe_send_after_ingest("2026-01-01", "run-1", [])
-            == "no_new_reviews"
-        )
+        assert review_summary.maybe_send_after_ingest("2026-01-01", "run-1", []) == "no_new_reviews"
 
 
 def test_maybe_send_dry_run(monkeypatch):

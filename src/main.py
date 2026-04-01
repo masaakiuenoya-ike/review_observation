@@ -159,9 +159,7 @@ def run_ingest():
         )
         store_name = place.get("display_name") or ""
         new_reviews = [
-            r
-            for r in reviews
-            if (r.get("provider_review_id") or "") not in existing_ids
+            r for r in reviews if (r.get("provider_review_id") or "") not in existing_ids
         ]
         bq_ops.merge_reviews(
             store_code=store_code,

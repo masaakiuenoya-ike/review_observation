@@ -28,6 +28,7 @@ SLACK_WEBHOOK_URL = (os.environ.get("SLACK_WEBHOOK_URL") or "").strip()
 # Google Maps（Place Details / Geocoding — fetch_gbp_locations の座標補完用。未設定なら GBP の latlng のみ）
 GOOGLE_MAPS_API_KEY = (os.environ.get("GOOGLE_MAPS_API_KEY") or "").strip()
 
+
 # 新規レビュー要約 → Slack（取込直後）。要約は BQ に保存しない。
 def _env_bool(name: str, default: bool = False) -> bool:
     v = (os.environ.get(name) or "").strip().lower()

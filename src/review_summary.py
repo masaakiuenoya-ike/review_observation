@@ -52,10 +52,7 @@ def _summarize_with_gemini(payload_json: str) -> str | None:
     model_id = config.GEMINI_MODEL.strip()
     if model_id.startswith("models/"):
         model_id = model_id.replace("models/", "", 1)
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/"
-        f"models/{model_id}:generateContent"
-    )
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent"
     prompt = f"""あなたは日本のローカルビジネスのレビュー分析担当です。
 以下の JSON は、今回の取込で「新規」と判定されたレビューだけを店舗別にまとめたものです。
 
