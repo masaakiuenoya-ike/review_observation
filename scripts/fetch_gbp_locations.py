@@ -101,9 +101,7 @@ def _account_id_from_resource_name(provider_place_id: str) -> str | None:
     return parts[1] or None
 
 
-def _v1_get_location(
-    access_token: str, path_suffix: str, read_mask: str
-) -> dict | None:
+def _v1_get_location(access_token: str, path_suffix: str, read_mask: str) -> dict | None:
     """Business Information v1 locations.get。成功時は JSON dict、失敗時は None。"""
     url = f"https://mybusinessbusinessinformation.googleapis.com/v1/{path_suffix}"
     r = _get_with_retry(
@@ -442,9 +440,7 @@ def _enrich_rows_latlng_via_get(
     filled = 0
     for store_code, provider_place_id, location_name, lat, lng in rows:
         if lat is None or lng is None:
-            lat2, lng2 = _fetch_latlng_detail(
-                access_token, provider_place_id, maps_api_key
-            )
+            lat2, lng2 = _fetch_latlng_detail(access_token, provider_place_id, maps_api_key)
             if lat2 is not None and lng2 is not None:
                 lat, lng = lat2, lng2
                 filled += 1
@@ -540,9 +536,7 @@ def main() -> int:
 
     from src import config as app_config
 
-    maps_api_key = (args.maps_api_key or "").strip() or (
-        app_config.GOOGLE_MAPS_API_KEY or None
-    )
+    maps_api_key = (args.maps_api_key or "").strip() or (app_config.GOOGLE_MAPS_API_KEY or None)
     if not maps_api_key:
         print(
             "注意: GOOGLE_MAPS_API_KEY または --maps-api-key がありません。"
@@ -641,8 +635,7 @@ def main() -> int:
         if lat is not None and lng is not None:
             try:
                 coord_sql = (
-                    f", latitude = {_format_bq_float(lat)}, "
-                    f"longitude = {_format_bq_float(lng)}"
+                    f", latitude = {_format_bq_float(lat)}, longitude = {_format_bq_float(lng)}"
                 )
             except ValueError:
                 coord_sql = ""
