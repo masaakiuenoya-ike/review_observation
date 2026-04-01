@@ -9,8 +9,8 @@
 
 | ジョブ名 | スケジュール | 呼び出し | Slack 通知 |
 |----------|--------------|----------|------------|
-| review-observation-hourly | 毎時 0 分 | POST / | **送らない**（取込のみ） |
-| review-observation-daily | 毎日 09:00 | POST / | **送らない**（取込のみ） |
+| review-observation-hourly | **2 時間ごと**（JST 0,2,4,… 時 0 分） | POST / | **送らない**（取込のみ） |
+| review-observation-daily | 毎日 09:00（任意・併用時は重複） | POST / | **送らない**（取込のみ） |
 | review-observation-sheets-update | 毎日 09:10 | POST /sheets-update | なし |
 | review-observation-daily-slack-warmup | 毎日 09:10 | GET /health | なし（09:15 用ウォームアップ） |
 | **review-observation-daily-slack** | **毎日 09:15** | **POST /daily-summary** | **1 日 1 回ここだけ** |
@@ -20,8 +20,8 @@
 
 ## 運用の流れ（例）
 
-1. 毎時: **hourly** が POST / で取込 → BQ・Sheets 更新（Slack は送らない）
-2. 毎日 09:00: **daily** が POST / で取込（Slack は送らない）
+1. **2 時間おき**: **hourly** が POST / で取込（直列 `MAX_WORKERS=1`）→ BQ・Sheets 更新（Slack は送らない）
+2. **daily** 取込ジョブは hourly と二重になるため **無効化推奨**
 3. 毎日 09:10: **sheets-update** でシートのみ更新。**daily-slack-warmup** で GET /health を実行し 09:15 用にウォームアップ。
 4. 毎日 09:15: **daily-slack** が POST /daily-summary → **Slack に 1 回だけ通知**
 

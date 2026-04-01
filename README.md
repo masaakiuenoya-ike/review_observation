@@ -29,7 +29,7 @@ Google Business Profile（GBP）のレビュー・評価を定点観測し、Big
 
 1. **places_provider_map**（BQ）から店舗一覧（store_code, provider_place_id, display_name 等）を取得。
 2. OAuth で GBP のアクセストークンを取得（Secret Manager の `gbp-oauth-json`）。
-3. 店舗ごとに **GBP API reviews.list** を呼び、評価・レビュー数を取得。並列数は **MAX_WORKERS**（デフォルト 10）。
+3. 店舗ごとに **GBP API reviews.list** を呼び、評価・レビュー数を取得。並列数は **MAX_WORKERS**（本番デプロイは **1**＝直列。ローカル既定も 1）。
 4. **ratings_daily_snapshot** にその日のスナップショットを MERGE（snapshot_date + store_code + provider）。**reviews** にレビュー明細を MERGE（store_code + provider + provider_review_id）。いずれも **store_name**（店舗名）を書き込む。
 5. **SHEET_ID** が設定されていれば、BQ の **v_latest_available_ratings** / **v_latest_available_alerts** を参照して **LATEST** / **ALERT** / **サマリ** タブを全置換。
 6. **SLACK_WEBHOOK_URL** が設定されていれば、取込結果のサマリを Slack に送る。
@@ -38,8 +38,8 @@ Google Business Profile（GBP）のレビュー・評価を定点観測し、Big
 
 | ジョブ名 | スケジュール | 呼び出し先 | 説明 |
 |----------|--------------|------------|------|
-| **review-observation-hourly** | 毎時 0 分 | POST / | 取込（レビュー取得＋BQ MERGE＋Sheets 更新）。**Slack は送らない**。 |
-| **review-observation-daily** | 毎日 09:00 | POST / | 同上。**Slack は送らない**。 |
+| **review-observation-hourly** | **2 時間ごと**（0 分、JST の 0,2,4,… 時） | POST / | 取込（レビュー取得＋BQ MERGE＋Sheets 更新）。**Slack は送らない**。 |
+| **review-observation-daily** | 毎日 09:00（任意） | POST / | hourly と **同じ取込**。併用すると重複するため **通常は PAUSE/削除**。 |
 | **review-observation-sheets-update** | **毎日 09:10** | POST /sheets-update | 1日1回、取込なしでシートだけ更新。 |
 | **review-observation-daily-slack-warmup** | **毎日 09:10** | GET /health | 09:15 の daily-slack 用ウォームアップ（コールドスタート防止）。 |
 | **review-observation-daily-slack** | **毎日 09:15** | POST /daily-summary | **Slack 通知はここだけ 1 日 1 回**。各店舗の評価・前日比を送る。 |

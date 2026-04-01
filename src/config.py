@@ -50,14 +50,15 @@ REVIEW_SUMMARY_SLACK_WEBHOOK_URL = (
 ).strip()
 
 
-# 取込の並列数（店舗ごとの GBP 取得＋BQ MERGE を同時に実行する数）。デフォルト 5。
+# 取込の並列数（店舗ごとの GBP 取得＋BQ MERGE を同時に実行する数）。
+# 1 にすると店舗を直列処理し、reviews テーブルへの同時 MERGE 競合を避けやすい。
 def _parse_max_workers() -> int:
-    v = os.environ.get("MAX_WORKERS", "5").strip()
+    v = os.environ.get("MAX_WORKERS", "1").strip()
     try:
         n = int(v)
         return max(1, min(n, 16))
     except ValueError:
-        return 5
+        return 1
 
 
 MAX_WORKERS = _parse_max_workers()

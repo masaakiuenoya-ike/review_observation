@@ -307,7 +307,7 @@ gcloud run deploy "${SERVICE_NAME}" \
   --no-allow-unauthenticated \
   --set-env-vars="TZ=Asia/Tokyo,BQ_PROJECT=ikeuchi-ga4,BQ_LOCATION=asia-northeast1,BQ_DATASET=mart_gbp,GCS_EXPORT_BUCKET=${GCS_EXPORT_BUCKET},SHEET_ID=${SHEET_ID}" \
   --set-env-vars="SHEET_TAB_LATEST=LATEST,SHEET_TAB_ALERT=ALERT,PROVIDER=google" \
-  --set-env-vars="ALERT_LOW_RATING=4.2,ALERT_DROP_RATING=-0.2,ALERT_SURGE_REVIEWS=10,MAX_WORKERS=5" \
+  --set-env-vars="ALERT_LOW_RATING=4.2,ALERT_DROP_RATING=-0.2,ALERT_SURGE_REVIEWS=10,MAX_WORKERS=1" \
   --set-env-vars="GBP_OAUTH_SECRET_NAME=gbp-oauth-json"
 ```
 
@@ -346,9 +346,11 @@ gcloud run services add-iam-policy-binding "${SERVICE_NAME}" \
 - 手動実行: GitHub の Actions タブで「Deploy to Cloud Run」を **Run workflow**。
 - 初回または Scheduler 用 SA 作成後は **10.1** の `run.invoker` 付与を実行する。
 
-### 10.3 1時間ごとジョブ（推奨: レビュー取得）
+### 10.3 取込ジョブ（推奨: 2 時間ごと＋直列取込）
 
-毎時 0 分（JST）に `POST /` を実行するジョブ。**Cloud Run デプロイ後に** 実行する。
+店舗ごとの BQ `reviews` MERGE を直列（Cloud Run の **MAX_WORKERS=1**、GitHub Actions デプロイで設定）にし、**次の取込と前が重なりにくいよう** **2 時間おき**（JST の 0,2,4,… 時 0 分）に `POST /` を実行する。
+
+**新規作成する場合:**
 
 ```bash
 export REGION="asia-northeast1"
@@ -358,7 +360,7 @@ export RUN_URL="$(gcloud run services describe "${SERVICE_NAME}" --region="${REG
 
 gcloud scheduler jobs create http review-observation-hourly \
   --location="${REGION}" \
-  --schedule="0 * * * *" \
+  --schedule="0 */2 * * *" \
   --time-zone="Asia/Tokyo" \
   --uri="${RUN_URL}/" \
   --http-method=POST \
@@ -368,12 +370,24 @@ gcloud scheduler jobs create http review-observation-hourly \
   --message-body="{}"
 ```
 
-- `0 * * * *` = 毎時 0 分（1日 24 回）。
-- 既に同名ジョブがある場合は `gcloud scheduler jobs delete review-observation-hourly --location=${REGION}` で削除してから再作成。
+- `0 */2 * * *` = 2 時間ごとの 0 分（1 日 12 回）。
+- 既存ジョブ名のまま **スケジュールだけ変える**場合:
+  ```bash
+  gcloud scheduler jobs update http review-observation-hourly \
+    --location=asia-northeast1 \
+    --schedule="0 */2 * * *" \
+    --time-zone="Asia/Tokyo"
+  ```
+- **取込は hourly のみ**にするなら、`review-observation-daily`（毎日 09:00 の `POST /`）は **重複実行**になるため **PAUSE または削除**すること:
+  ```bash
+  gcloud scheduler jobs pause review-observation-daily --location=asia-northeast1
+  # または: gcloud scheduler jobs delete review-observation-daily --location=asia-northeast1
+  ```
+- 毎時実行に戻す場合の cron 例: `0 * * * *`（1 日 24 回。直列取込が長いときは 2 時間おき推奨）。
+- 既に同名ジョブがある場合で作り直すときは `gcloud scheduler jobs delete review-observation-hourly --location=${REGION}` のあとに create。
 - 取込に数分かかるため、**attemptDeadline** を延長すること（デフォルト 180 秒だと code: 4 になる）。**Scheduler の上限は 30 分（1800s）**。Cloud Run は deploy で `--timeout=3600`:
   ```bash
   gcloud scheduler jobs update http review-observation-hourly --location=asia-northeast1 --attempt-deadline=1800s
-  gcloud scheduler jobs update http review-observation-daily --location=asia-northeast1 --attempt-deadline=1800s
   ```
 
 **Scheduler とデータ更新の確認**:
