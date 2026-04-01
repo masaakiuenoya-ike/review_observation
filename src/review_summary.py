@@ -46,18 +46,16 @@ def _build_prompt_payload(
 
 
 def _summarize_with_gemini(payload_json: str) -> str | None:
-    try:
-        import google.generativeai as genai
-    except ImportError:
-        print(
-            "[review_summary] google-generativeai が未インストールです",
-            file=sys.stderr,
-        )
-        return None
+    """Gemini は REST（requests）のみ。pip の依存解決を増やさない。"""
     if not config.GEMINI_API_KEY:
         return None
-    genai.configure(api_key=config.GEMINI_API_KEY)
-    model = genai.GenerativeModel(config.GEMINI_MODEL)
+    model_id = config.GEMINI_MODEL.strip()
+    if model_id.startswith("models/"):
+        model_id = model_id.replace("models/", "", 1)
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/"
+        f"models/{model_id}:generateContent"
+    )
     prompt = f"""あなたは日本のローカルビジネスのレビュー分析担当です。
 以下の JSON は、今回の取込で「新規」と判定されたレビューだけを店舗別にまとめたものです。
 
@@ -72,17 +70,45 @@ def _summarize_with_gemini(payload_json: str) -> str | None:
 JSON:
 {payload_json}
 """
+    body: dict[str, Any] = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.4, "maxOutputTokens": 8192},
+    }
     try:
-        resp = model.generate_content(prompt)
-    except Exception as e:
-        print(f"[review_summary] Gemini API error: {e}", file=sys.stderr)
+        r = requests.post(
+            url,
+            params={"key": config.GEMINI_API_KEY},
+            json=body,
+            timeout=120,
+        )
+    except requests.RequestException as e:
+        print(f"[review_summary] Gemini request error: {e}", file=sys.stderr)
         return None
-    text = (getattr(resp, "text", None) or "").strip()
-    if not text and resp.candidates:
-        # ブロック時など
+    try:
+        data = r.json()
+    except Exception:
+        print(f"[review_summary] Gemini invalid JSON: {r.text[:500]}", file=sys.stderr)
+        return None
+    if not r.ok:
+        err = data.get("error", {}) if isinstance(data, dict) else {}
+        msg = err.get("message", r.text[:500])
+        print(f"[review_summary] Gemini HTTP {r.status_code}: {msg}", file=sys.stderr)
+        return None
+    try:
+        candidates = data.get("candidates") or []
+        parts = (candidates[0].get("content") or {}).get("parts") or []
+        chunks = [p.get("text", "") for p in parts if isinstance(p, dict)]
+        text = "\n".join(chunks).strip()
+    except (IndexError, KeyError, TypeError):
+        print(
+            f"[review_summary] Gemini unexpected response: {str(data)[:500]}",
+            file=sys.stderr,
+        )
+        return None
+    if not text:
         print("[review_summary] Gemini returned empty text", file=sys.stderr)
         return None
-    return text if text else None
+    return text
 
 
 def _slack_webhook_url() -> str:
