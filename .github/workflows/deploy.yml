@@ -7,6 +7,8 @@
 #   GCS_EXPORT_BUCKET       - CSV 出力用 GCS バケット名（Cloud Run の環境変数に渡す）
 #   SHEET_ID                - 書き込み先 Google スプレッドシートの ID（Cloud Run の環境変数に渡す）
 # 任意: SLACK_WEBHOOK_URL（Incoming Webhook URL。設定時のみ Cloud Run に渡し、取込後に Slack 通知）
+# 任意: GEMINI_API_KEY（新規レビュー要約。REVIEW_SUMMARY_ENABLED と併用）
+# 任意: REVIEW_SUMMARY_ENABLED / REVIEW_SUMMARY_SLACK_DRY_RUN / REVIEW_SUMMARY_SLACK_WEBHOOK_URL / GEMINI_MODEL
 # 任意: GCP_PROJECT_ID（未設定時は ikeuchi-data-sync を使用）
 
 name: Deploy to Cloud Run
@@ -134,6 +136,11 @@ jobs:
           SHEET_ID: ${{ secrets.SHEET_ID }}
           GCS_EXPORT_BUCKET: ${{ secrets.GCS_EXPORT_BUCKET }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
+          REVIEW_SUMMARY_ENABLED: ${{ secrets.REVIEW_SUMMARY_ENABLED }}
+          REVIEW_SUMMARY_SLACK_DRY_RUN: ${{ secrets.REVIEW_SUMMARY_SLACK_DRY_RUN }}
+          REVIEW_SUMMARY_SLACK_WEBHOOK_URL: ${{ secrets.REVIEW_SUMMARY_SLACK_WEBHOOK_URL }}
         run: |
           set -e
           IMAGE_URI="${{ needs.build-push.outputs.image_uri }}"
@@ -143,10 +150,16 @@ jobs:
           fi
           echo "Deploying image (sha): ${{ github.sha }}"
           echo "SLACK_WEBHOOK_URL is set: $([ -n \"${SLACK_WEBHOOK_URL}\" ] && echo yes || echo no)"
+          echo "GEMINI_API_KEY is set: $([ -n \"${GEMINI_API_KEY}\" ] && echo yes || echo no)"
           ENV_VARS="TZ=Asia/Tokyo,BQ_PROJECT=ikeuchi-ga4,BQ_DATASET=mart_gbp,BQ_LOCATION=${{ env.REGION }},GBP_OAUTH_SECRET_NAME=gbp-oauth-json,SHEET_TAB_LATEST=LATEST,SHEET_TAB_ALERT=ALERT,PROVIDER=google,ALERT_LOW_RATING=4.2,ALERT_DROP_RATING=-0.2,ALERT_SURGE_REVIEWS=10,MAX_WORKERS=10"
           [ -n "${SHEET_ID}" ] && ENV_VARS="${ENV_VARS},SHEET_ID=${SHEET_ID}"
           [ -n "${GCS_EXPORT_BUCKET}" ] && ENV_VARS="${ENV_VARS},GCS_EXPORT_BUCKET=${GCS_EXPORT_BUCKET}"
           [ -n "${SLACK_WEBHOOK_URL}" ] && ENV_VARS="${ENV_VARS},SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}"
+          [ -n "${GEMINI_API_KEY}" ] && ENV_VARS="${ENV_VARS},GEMINI_API_KEY=${GEMINI_API_KEY}"
+          [ -n "${GEMINI_MODEL}" ] && ENV_VARS="${ENV_VARS},GEMINI_MODEL=${GEMINI_MODEL}"
+          [ -n "${REVIEW_SUMMARY_ENABLED}" ] && ENV_VARS="${ENV_VARS},REVIEW_SUMMARY_ENABLED=${REVIEW_SUMMARY_ENABLED}"
+          [ -n "${REVIEW_SUMMARY_SLACK_DRY_RUN}" ] && ENV_VARS="${ENV_VARS},REVIEW_SUMMARY_SLACK_DRY_RUN=${REVIEW_SUMMARY_SLACK_DRY_RUN}"
+          [ -n "${REVIEW_SUMMARY_SLACK_WEBHOOK_URL}" ] && ENV_VARS="${ENV_VARS},REVIEW_SUMMARY_SLACK_WEBHOOK_URL=${REVIEW_SUMMARY_SLACK_WEBHOOK_URL}"
           gcloud run deploy ${{ env.SERVICE_NAME }} \
             --image="$IMAGE_URI" \
             --region=${{ env.REGION }} \
@@ -174,7 +187,7 @@ jobs:
           sleep 45
           TOKEN=$(gcloud auth print-identity-token --audiences="${AUDIENCE}" 2>/dev/null) || true
           if [ -z "$TOKEN" ]; then
-            echo "::notice title=Health check skipped::gcloud identity token with --audiences requires a service account (WIF in CI does not). Deploy succeeded; verify manually with: curl -H \"Authorization: Bearer \$(gcloud auth print-identity-token)\" $URL"
+            echo "::notice title=Health check skipped::gcloud identity token with --audiences requires a service account (WIF in CI does not). Deploy succeeded; verify manually: URL=\$(gcloud run services describe ${{ env.SERVICE_NAME }} --region=${{ env.REGION }} --format='value(status.url)'); TOKEN=\$(gcloud auth print-identity-token --audiences=\"\$URL\"); curl -s -w \"\\nHTTP: %{http_code}\" --max-time 60 -H \"Authorization: Bearer \$TOKEN\" \"\$URL/health\""
             exit 0
           fi
           for i in 1 2 3 4 5 6 7 8 9 10; do

@@ -41,6 +41,7 @@ Google Business Profile（GBP）のレビュー・評価を定点観測し、Big
 | **review-observation-hourly** | 毎時 0 分 | POST / | 取込（レビュー取得＋BQ MERGE＋Sheets 更新）。**Slack は送らない**。 |
 | **review-observation-daily** | 毎日 09:00 | POST / | 同上。**Slack は送らない**。 |
 | **review-observation-sheets-update** | **毎日 09:10** | POST /sheets-update | 1日1回、取込なしでシートだけ更新。 |
+| **review-observation-daily-slack-warmup** | **毎日 09:10** | GET /health | 09:15 の daily-slack 用ウォームアップ（コールドスタート防止）。 |
 | **review-observation-daily-slack** | **毎日 09:15** | POST /daily-summary | **Slack 通知はここだけ 1 日 1 回**。各店舗の評価・前日比を送る。 |
 
 詳細は [docs/Slack通知の設定.md](docs/Slack通知の設定.md) を参照。
@@ -160,6 +161,22 @@ python -m src.main
 ```
 
 GCP の BigQuery / Sheets 等を使う場合は、`gcloud auth application-default login` で ADC を設定し、環境変数（BQ_PROJECT, BQ_DATASET, SHEET_ID 等）を設定する。
+
+### 新規レビュー要約（Gemini → Slack、任意）
+
+`POST /` の取込の直後（`ratings_daily_snapshot` MERGE 後）、**取込開始時点の BQ に無かった `provider_review_id` だけ**を新規とみなし、店舗別に Gemini でポジ/ネガ要約して Slack に送る。要約は **BigQuery には保存しない**。
+
+| 環境変数 | 説明 |
+|----------|------|
+| `REVIEW_SUMMARY_ENABLED` | `true` で有効（既定は無効） |
+| `GEMINI_API_KEY` | Google AI Studio 等で発行したキー |
+| `GEMINI_MODEL` | 省略時 `gemini-2.0-flash` |
+| `REVIEW_SUMMARY_SLACK_WEBHOOK_URL` | 省略時は `SLACK_WEBHOOK_URL` を使用 |
+| `REVIEW_SUMMARY_SLACK_DRY_RUN` | `true` のとき **Slack へ POST しない**（要約はログ出力。Gemini は実行） |
+
+HTTP 応答 JSON に `new_reviews_count` と `review_summary`（`disabled` / `sent` / `dry_run_logged` 等）が付く。
+
+**Cloud Run（本番）**: GitHub の **Settings → Secrets and variables → Actions** に `GEMINI_API_KEY` を登録すると、`.github/workflows/deploy.yml` がデプロイ時に環境変数として注入します（値はログに出ません。`GEMINI_API_KEY is set: yes` のみ）。手動デプロイなら `gcloud run services update ... --set-env-vars` またはコンソールの「変数とシークレット」でも同様に設定可能です。
 
 ---
 

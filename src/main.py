@@ -20,6 +20,7 @@ from . import config
 from . import bq_ops
 from . import gbp_oauth
 from . import gbp_reviews
+from . import review_summary
 from . import sheets_writer
 from . import slack_notify
 
@@ -125,6 +126,14 @@ def run_ingest():
         for p in places
         if (p.get("provider_place_id") or "").strip()
     ]
+    store_codes_for_existing = [p["store_code"] for p, _ in places_with_id]
+    print(
+        f"[review_observation] fetching existing review ids for {len(store_codes_for_existing)} stores...",
+        flush=True,
+    )
+    existing_review_ids_by_store = bq_ops.fetch_existing_review_ids_by_store(
+        store_codes_for_existing, "google"
+    )
     if not places_with_id:
         return jsonify(
             {
@@ -137,13 +146,23 @@ def run_ingest():
             }
         ), 200
 
-    def _process_one(place: dict, provider_place_id: str, tok: str) -> tuple[dict, dict]:
-        """1 店舗を取得・MERGE し、(rating_row, star_count_dict) を返す。401 のときは HTTPError をそのまま上げる。"""
+    def _process_one(
+        place: dict,
+        provider_place_id: str,
+        tok: str,
+        existing_ids: set[str],
+    ) -> tuple[dict, dict, list[dict]]:
+        """1 店舗を取得・MERGE し、(rating_row, star_count_dict, 新規レビュー行) を返す。"""
         store_code = place["store_code"]
         avg_rating, total_count, reviews = gbp_reviews.fetch_reviews_for_location(
             tok, provider_place_id
         )
         store_name = place.get("display_name") or ""
+        new_reviews = [
+            r
+            for r in reviews
+            if (r.get("provider_review_id") or "") not in existing_ids
+        ]
         bq_ops.merge_reviews(
             store_code=store_code,
             provider=place["provider"],
@@ -169,7 +188,7 @@ def run_ingest():
             "count_1star": count_1,
             "count_5star": count_5,
         }
-        return (rating_row, star_count)
+        return (rating_row, star_count, new_reviews)
 
     results_by_store: dict[str, tuple[dict, dict]] = {}
     errors = 0
@@ -181,18 +200,21 @@ def run_ingest():
     )
     with ThreadPoolExecutor(max_workers=config.MAX_WORKERS) as executor:
         futures = {
-            executor.submit(_process_one, place, provider_place_id, access_token): (
+            executor.submit(
+                _process_one,
                 place,
                 provider_place_id,
-            )
+                access_token,
+                set(existing_review_ids_by_store.get(place["store_code"], ())),
+            ): (place, provider_place_id)
             for place, provider_place_id in places_with_id
         }
         for future in as_completed(futures):
             place, provider_place_id = futures[future]
             store_code = place["store_code"]
             try:
-                r_row, s_count = future.result()
-                results_by_store[store_code] = (r_row, s_count)
+                r_row, s_count, new_rev = future.result()
+                results_by_store[store_code] = (r_row, s_count, new_rev)
             except requests.exceptions.HTTPError as e:
                 if e.response is not None and e.response.status_code == 401:
                     need_401_retry.append((place, provider_place_id))
@@ -221,6 +243,7 @@ def run_ingest():
                             "count_1star": 0,
                             "count_5star": 0,
                         },
+                        [],
                     )
             except Exception as e:
                 errors += 1
@@ -247,6 +270,7 @@ def run_ingest():
                         "count_1star": 0,
                         "count_5star": 0,
                     },
+                    [],
                 )
 
     if need_401_retry:
@@ -262,8 +286,13 @@ def run_ingest():
             for place, provider_place_id in need_401_retry:
                 store_code = place["store_code"]
                 try:
-                    r_row, s_count = _process_one(place, provider_place_id, access_token)
-                    results_by_store[store_code] = (r_row, s_count)
+                    r_row, s_count, new_rev = _process_one(
+                        place,
+                        provider_place_id,
+                        access_token,
+                        set(existing_review_ids_by_store.get(store_code, ())),
+                    )
+                    results_by_store[store_code] = (r_row, s_count, new_rev)
                 except Exception as retry_e:
                     errors += 1
                     if errors == 1:
@@ -289,6 +318,7 @@ def run_ingest():
                             "count_1star": 0,
                             "count_5star": 0,
                         },
+                        [],
                     )
         except Exception as e:
             print(f"[review_observation] token refresh failed: {e}", file=sys.stderr)
@@ -311,6 +341,7 @@ def run_ingest():
                             "count_1star": 0,
                             "count_5star": 0,
                         },
+                        [],
                     )
 
     # 元の places 順で rating_rows / star_counts_per_store を並べる
@@ -319,7 +350,7 @@ def run_ingest():
     star_counts_per_store = []
     for store_code in store_order:
         if store_code in results_by_store:
-            r_row, s_count = results_by_store[store_code]
+            r_row, s_count, _new_rev = results_by_store[store_code]
             rating_rows.append(r_row)
             star_counts_per_store.append(s_count)
 
@@ -327,6 +358,29 @@ def run_ingest():
         bq_ops.merge_ratings_daily_snapshot(snapshot_date, ingest_run_id, rating_rows)
     except Exception as e:
         return jsonify({"ok": False, "error": str(e), "ingest_run_id": ingest_run_id}), 500
+
+    stores_with_new_reviews: list[dict] = []
+    new_review_total = 0
+    for store_code in store_order:
+        if store_code not in results_by_store:
+            continue
+        r_row, _s_count, new_rev = results_by_store[store_code]
+        if new_rev:
+            new_review_total += len(new_rev)
+            stores_with_new_reviews.append(
+                {"store_name": r_row.get("store_name") or "", "reviews": new_rev}
+            )
+
+    review_summary_status = "disabled"
+    try:
+        review_summary_status = review_summary.maybe_send_after_ingest(
+            snapshot_date.isoformat(),
+            ingest_run_id,
+            stores_with_new_reviews,
+        )
+    except Exception as e:
+        print(f"[review_observation] review summary pipeline failed: {e}", file=sys.stderr)
+        review_summary_status = "error"
 
     sheets_updated = False
     if config.SHEET_ID:
@@ -359,6 +413,8 @@ def run_ingest():
             "processed": len(rating_rows),
             "errors": errors,
             "sheets_updated": sheets_updated,
+            "new_reviews_count": new_review_total,
+            "review_summary": review_summary_status,
         }
     ), 200
 

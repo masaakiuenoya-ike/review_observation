@@ -8,6 +8,8 @@ CREATE TABLE IF NOT EXISTS `YOUR_DATASET.places_provider_map` (
   provider_place_id STRING NOT NULL,
   provider_account_id STRING,
   display_name STRING,
+  latitude FLOAT64,
+  longitude FLOAT64,
   is_active BOOL NOT NULL,
   created_at TIMESTAMP,
   updated_at TIMESTAMP

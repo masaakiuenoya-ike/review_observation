@@ -12,6 +12,7 @@
 | review-observation-hourly | 毎時 0 分 | POST / | **送らない**（取込のみ） |
 | review-observation-daily | 毎日 09:00 | POST / | **送らない**（取込のみ） |
 | review-observation-sheets-update | 毎日 09:10 | POST /sheets-update | なし |
+| review-observation-daily-slack-warmup | 毎日 09:10 | GET /health | なし（09:15 用ウォームアップ） |
 | **review-observation-daily-slack** | **毎日 09:15** | **POST /daily-summary** | **1 日 1 回ここだけ** |
 
 - 取込（POST /）は hourly や daily で実行されるが、**完了時の Slack 送信は行わない**（main.py で send_slack_notification を呼ばない）。
@@ -21,7 +22,7 @@
 
 1. 毎時: **hourly** が POST / で取込 → BQ・Sheets 更新（Slack は送らない）
 2. 毎日 09:00: **daily** が POST / で取込（Slack は送らない）
-3. 毎日 09:10: **sheets-update** でシートのみ更新
+3. 毎日 09:10: **sheets-update** でシートのみ更新。**daily-slack-warmup** で GET /health を実行し 09:15 用にウォームアップ。
 4. 毎日 09:15: **daily-slack** が POST /daily-summary → **Slack に 1 回だけ通知**
 
 ## 設定の確認コマンド

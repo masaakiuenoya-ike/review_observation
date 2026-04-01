@@ -4,6 +4,7 @@ BigQuery: places_provider_map 読込、ratings_daily_snapshot MERGE、reviews ME
 
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import date
 from typing import Any
 
@@ -45,6 +46,41 @@ def load_places_provider_map(
     )
     # 最大120秒でタイムアウト（ハング防止）
     return [dict(row) for row in job.result(timeout=120)]
+
+
+def fetch_existing_review_ids_by_store(
+    store_codes: list[str],
+    provider: str,
+) -> dict[str, set[str]]:
+    """
+    ingest 開始時点のスナップショット。各 store_code に既存の provider_review_id を集める。
+    MERGE 直前の差分＝新規レビュー判定に使う。
+    """
+    if not store_codes:
+        return {}
+    client = get_client()
+    ds = config.BQ_DATASET
+    query = f"""
+    SELECT store_code, provider_review_id
+    FROM `{config.BQ_PROJECT}.{ds}.reviews`
+    WHERE provider = @provider
+      AND store_code IN UNNEST(@store_codes)
+    """
+    job = client.query(
+        query,
+        job_config=bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("provider", "STRING", provider),
+                bigquery.ArrayQueryParameter("store_codes", "STRING", store_codes),
+            ]
+        ),
+    )
+    out: dict[str, set[str]] = defaultdict(set)
+    for row in job.result(timeout=120):
+        rid = (row["provider_review_id"] or "").strip()
+        if rid:
+            out[row["store_code"]].add(rid)
+    return dict(out)
 
 
 def merge_ratings_daily_snapshot(
