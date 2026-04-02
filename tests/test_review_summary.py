@@ -28,7 +28,7 @@ def test_maybe_send_dry_run(monkeypatch):
     monkeypatch.setattr(review_summary.config, "GEMINI_MODEL", "gemini-2.0-flash")
 
     with mock.patch(
-        "src.review_summary._summarize_with_gemini", return_value="【ポジ】良い\n【ネガ】なし"
+        "src.review_summary._summarize_review_text", return_value="【ポジ】良い\n【ネガ】なし"
     ):
         out = review_summary.maybe_send_after_ingest("2026-01-01", "run-1", stores)
     assert out == "dry_run_logged"
@@ -52,7 +52,7 @@ def test_maybe_send_slack_post_failed(monkeypatch):
         text = "invalid_payload"
 
     with (
-        mock.patch("src.review_summary._summarize_with_gemini", return_value="要約本文"),
+        mock.patch("src.review_summary._summarize_review_text", return_value="要約本文"),
         mock.patch("src.review_summary.requests.post", return_value=BadResp()),
     ):
         out = review_summary.maybe_send_after_ingest("2026-01-01", "run-1", stores)
@@ -67,9 +67,29 @@ def test_maybe_send_no_gemini_key(monkeypatch):
         }
     ]
     monkeypatch.setattr(review_summary.config, "REVIEW_SUMMARY_ENABLED", True)
+    monkeypatch.setattr(review_summary.config, "REVIEW_SUMMARY_USE_VERTEX_AI", False)
     monkeypatch.setattr(review_summary.config, "GEMINI_API_KEY", "")
 
     assert (
         review_summary.maybe_send_after_ingest("2026-01-01", "run-1", stores)
         == "skipped_no_gemini_key"
     )
+
+
+def test_maybe_send_vertex_dry_run(monkeypatch):
+    stores = [
+        {
+            "store_name": "Vertex店",
+            "reviews": [{"rating": 5.0, "review_text": "良い", "provider_review_id": "v"}],
+        }
+    ]
+    monkeypatch.setattr(review_summary.config, "REVIEW_SUMMARY_ENABLED", True)
+    monkeypatch.setattr(review_summary.config, "REVIEW_SUMMARY_USE_VERTEX_AI", True)
+    monkeypatch.setattr(review_summary.config, "REVIEW_SUMMARY_SLACK_DRY_RUN", True)
+    monkeypatch.setattr(review_summary.config, "VERTEX_AI_PROJECT", "test-proj")
+    monkeypatch.setattr(review_summary.config, "VERTEX_AI_LOCATION", "us-central1")
+    monkeypatch.setattr(review_summary.config, "GEMINI_MODEL", "gemini-2.0-flash-001")
+
+    with mock.patch("src.review_summary._summarize_via_vertex", return_value="Vertex要約"):
+        out = review_summary.maybe_send_after_ingest("2026-01-01", "run-v", stores)
+    assert out == "dry_run_logged"

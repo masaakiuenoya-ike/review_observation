@@ -1,12 +1,14 @@
 """
 取込で検出した「新規」レビューのみを Gemini で店舗別に要約し、Slack に送る。
 要約は BigQuery に保存しない。
+生成は Vertex AI または Google AI Studio（API キー）のいずれか（config.REVIEW_SUMMARY_USE_VERTEX_AI）。
 """
 
 from __future__ import annotations
 
 import json
 import sys
+import threading
 from typing import Any
 
 import requests
@@ -15,6 +17,9 @@ from . import config
 
 _MAX_TEXT_PER_REVIEW = 1200
 _MAX_REVIEWS_PER_STORE = 40
+
+_vertex_lock = threading.Lock()
+_vertex_inited = False
 
 
 def _truncate(s: str, n: int) -> str:
@@ -45,15 +50,8 @@ def _build_prompt_payload(
     return json.dumps({"stores": slim}, ensure_ascii=False)
 
 
-def _summarize_with_gemini(payload_json: str) -> str | None:
-    """Gemini は REST（requests）のみ。pip の依存解決を増やさない。"""
-    if not config.GEMINI_API_KEY:
-        return None
-    model_id = config.GEMINI_MODEL.strip()
-    if model_id.startswith("models/"):
-        model_id = model_id.replace("models/", "", 1)
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent"
-    prompt = f"""あなたは日本のローカルビジネスのレビュー分析担当です。
+def _review_summary_user_prompt(payload_json: str) -> str:
+    return f"""あなたは日本のローカルビジネスのレビュー分析担当です。
 以下の JSON は、今回の取込で「新規」と判定されたレビューだけを店舗別にまとめたものです。
 
 ルール:
@@ -67,6 +65,80 @@ def _summarize_with_gemini(payload_json: str) -> str | None:
 JSON:
 {payload_json}
 """
+
+
+def _normalize_gemini_model_id() -> str:
+    m = config.GEMINI_MODEL.strip()
+    if m.startswith("models/"):
+        m = m.replace("models/", "", 1)
+    return m
+
+
+def _ensure_vertex_init() -> None:
+    global _vertex_inited
+    with _vertex_lock:
+        if _vertex_inited:
+            return
+        import vertexai
+
+        vertexai.init(
+            project=config.VERTEX_AI_PROJECT,
+            location=config.VERTEX_AI_LOCATION,
+        )
+        _vertex_inited = True
+        print(
+            f"[review_summary] Vertex AI init project={config.VERTEX_AI_PROJECT} "
+            f"location={config.VERTEX_AI_LOCATION}",
+            flush=True,
+        )
+
+
+def _summarize_via_vertex(payload_json: str) -> str | None:
+    """Vertex AI の Gemini（ADC / Cloud Run 実行 SA）。"""
+    prompt = _review_summary_user_prompt(payload_json)
+    try:
+        _ensure_vertex_init()
+        from vertexai.generative_models import GenerativeModel, GenerationConfig
+    except ImportError as e:
+        print(f"[review_summary] Vertex SDK import error: {e}", file=sys.stderr)
+        return None
+    except Exception as e:
+        print(f"[review_summary] Vertex init error: {e}", file=sys.stderr)
+        return None
+    model_name = _normalize_gemini_model_id()
+    try:
+        model = GenerativeModel(model_name)
+        response = model.generate_content(
+            prompt,
+            generation_config=GenerationConfig(
+                temperature=0.4,
+                max_output_tokens=8192,
+            ),
+        )
+    except Exception as e:
+        print(f"[review_summary] Vertex generate_content error: {e}", file=sys.stderr)
+        return None
+    if not response.candidates:
+        print("[review_summary] Vertex no candidates", file=sys.stderr)
+        return None
+    try:
+        text = (response.text or "").strip()
+    except (ValueError, AttributeError) as e:
+        print(f"[review_summary] Vertex blocked or empty response: {e}", file=sys.stderr)
+        return None
+    if not text:
+        print("[review_summary] Vertex empty text", file=sys.stderr)
+        return None
+    return text
+
+
+def _summarize_via_gemini_api_key(payload_json: str) -> str | None:
+    """Google AI Studio 等の API キー（generativelanguage.googleapis.com）。"""
+    if not config.GEMINI_API_KEY:
+        return None
+    model_id = _normalize_gemini_model_id()
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent"
+    prompt = _review_summary_user_prompt(payload_json)
     body: dict[str, Any] = {
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "generationConfig": {"temperature": 0.4, "maxOutputTokens": 8192},
@@ -124,6 +196,18 @@ JSON:
             file=sys.stderr,
         )
     return text
+
+
+def _summarize_review_text(payload_json: str) -> str | None:
+    if config.REVIEW_SUMMARY_USE_VERTEX_AI:
+        return _summarize_via_vertex(payload_json)
+    return _summarize_via_gemini_api_key(payload_json)
+
+
+def _generative_backend_configured() -> bool:
+    if config.REVIEW_SUMMARY_USE_VERTEX_AI:
+        return bool(config.VERTEX_AI_PROJECT and config.VERTEX_AI_LOCATION)
+    return bool(config.GEMINI_API_KEY)
 
 
 def _slack_webhook_url() -> str:
@@ -186,13 +270,19 @@ def maybe_send_after_ingest(
         return "no_new_reviews"
 
     payload_json = _build_prompt_payload(nonempty)
-    summary = _summarize_with_gemini(payload_json)
+    summary = _summarize_review_text(payload_json)
     if not summary:
-        if not config.GEMINI_API_KEY:
-            print(
-                "[review_summary] GEMINI_API_KEY が未設定のためスキップ",
-                file=sys.stderr,
-            )
+        if not _generative_backend_configured():
+            if config.REVIEW_SUMMARY_USE_VERTEX_AI:
+                print(
+                    "[review_summary] Vertex AI: プロジェクト/リージョンが未設定のためスキップ",
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    "[review_summary] GEMINI_API_KEY が未設定のためスキップ",
+                    file=sys.stderr,
+                )
             return "skipped_no_gemini_key"
         return "skipped_gemini_failed"
 

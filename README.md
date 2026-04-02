@@ -166,17 +166,25 @@ GCP の BigQuery / Sheets 等を使う場合は、`gcloud auth application-defau
 
 `POST /` の取込の直後（`ratings_daily_snapshot` MERGE 後）、**取込開始時点の BQ に無かった `provider_review_id` だけ**を新規とみなし、店舗別に Gemini でポジ/ネガ要約して Slack に送る。要約は **BigQuery には保存しない**。
 
+**生成 API の切り替え**（どちらか一方）:
+
+- **Vertex AI（推奨・GCP 課金）**: `REVIEW_SUMMARY_USE_VERTEX_AI=true`。Cloud Run の**実行サービスアカウント（ADC）**で呼び出す。**Vertex AI API** を有効化し、当該 SA に **`roles/aiplatform.user`**（対象は `VERTEX_AI_PROJECT`）を付与する。`GEMINI_API_KEY` は不要。
+- **Google AI Studio の API キー**: `REVIEW_SUMMARY_USE_VERTEX_AI` を未設定または `false`。`GEMINI_API_KEY` を設定（無料枠は 429 になりやすい）。
+
 | 環境変数 | 説明 |
 |----------|------|
 | `REVIEW_SUMMARY_ENABLED` | `true` で有効（既定は無効） |
-| `GEMINI_API_KEY` | Google AI Studio 等で発行したキー |
-| `GEMINI_MODEL` | 省略時 `gemini-2.0-flash` |
+| `REVIEW_SUMMARY_USE_VERTEX_AI` | `true` で Vertex AI 経由（既定 `false`＝API キー方式） |
+| `VERTEX_AI_PROJECT` | Vertex の GCP プロジェクト ID（省略時は `GCP_PROJECT_ID` → `ikeuchi-data-sync`） |
+| `VERTEX_AI_LOCATION` | Vertex のリージョン（省略時 `us-central1`。東京寄せは `asia-northeast1` 等。モデルにより利用可能リージョンが異なる） |
+| `GEMINI_API_KEY` | API キー方式のときのみ（Google AI Studio 等） |
+| `GEMINI_MODEL` | 例: `gemini-2.0-flash-001`（Vertex） / `gemini-2.0-flash`（API キー）。Vertex ではリージョンで利用可能なモデル名を指定 |
 | `REVIEW_SUMMARY_SLACK_WEBHOOK_URL` | 省略時は `SLACK_WEBHOOK_URL` を使用 |
 | `REVIEW_SUMMARY_SLACK_DRY_RUN` | `true` のとき **Slack へ POST しない**（要約はログ出力。Gemini は実行） |
 
 HTTP 応答 JSON に `new_reviews_count` と `review_summary`（`disabled` / `sent` / `dry_run_logged` 等）が付く。
 
-**Cloud Run（本番）**: GitHub の **Settings → Secrets and variables → Actions** に `GEMINI_API_KEY` を登録すると、`.github/workflows/deploy.yml` がデプロイ時に環境変数として注入します（値はログに出ません。`GEMINI_API_KEY is set: yes` のみ）。手動デプロイなら `gcloud run services update ... --set-env-vars` またはコンソールの「変数とシークレット」でも同様に設定可能です。
+**Cloud Run（本番）**: GitHub **Actions の Secrets** に `REVIEW_SUMMARY_USE_VERTEX_AI` / `VERTEX_AI_*` または `GEMINI_API_KEY` を登録し、デプロイで注入する（ログには `is set: yes` のみ）。手動デプロイなら `gcloud run services update ... --set-env-vars` でも可。
 
 ---
 
