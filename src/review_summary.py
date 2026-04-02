@@ -93,7 +93,16 @@ JSON:
         return None
     try:
         candidates = data.get("candidates") or []
-        parts = (candidates[0].get("content") or {}).get("parts") or []
+        if not candidates:
+            fb = data.get("promptFeedback") if isinstance(data, dict) else None
+            print(
+                f"[review_summary] Gemini no candidates (promptFeedback={fb})",
+                file=sys.stderr,
+            )
+            return None
+        cand0 = candidates[0] if isinstance(candidates[0], dict) else {}
+        fr = cand0.get("finishReason")
+        parts = (cand0.get("content") or {}).get("parts") or []
         chunks = [p.get("text", "") for p in parts if isinstance(p, dict)]
         text = "\n".join(chunks).strip()
     except (IndexError, KeyError, TypeError):
@@ -103,8 +112,17 @@ JSON:
         )
         return None
     if not text:
-        print("[review_summary] Gemini returned empty text", file=sys.stderr)
+        fb = data.get("promptFeedback") if isinstance(data, dict) else None
+        print(
+            f"[review_summary] Gemini empty text finishReason={fr} promptFeedback={fb}",
+            file=sys.stderr,
+        )
         return None
+    if fr and fr not in ("STOP", "MAX_TOKENS"):
+        print(
+            f"[review_summary] Gemini note: finishReason={fr} (text was returned anyway)",
+            file=sys.stderr,
+        )
     return text
 
 
@@ -112,8 +130,8 @@ def _slack_webhook_url() -> str:
     return (config.REVIEW_SUMMARY_SLACK_WEBHOOK_URL or config.SLACK_WEBHOOK_URL or "").strip()
 
 
-def _post_slack_markdown(title: str, body: str) -> None:
-    """Slack Incoming Webhook。text は一部 mrkdwn が効く。"""
+def _post_slack_markdown(title: str, body: str) -> bool:
+    """Slack Incoming Webhook。text は一部 mrkdwn が効く。全チャンク成功で True。"""
     url = _slack_webhook_url()
     if config.REVIEW_SUMMARY_SLACK_DRY_RUN:
         print(
@@ -121,13 +139,13 @@ def _post_slack_markdown(title: str, body: str) -> None:
             f"--- {title} ---\n{body}\n--- end ---",
             flush=True,
         )
-        return
+        return True
     if not url:
         print(
             "[review_summary] Webhook URL がありません（REVIEW_SUMMARY_SLACK_WEBHOOK_URL または SLACK_WEBHOOK_URL）",
             file=sys.stderr,
         )
-        return
+        return False
     # 4000 文字超は分割（安全マージン）
     chunk_size = 3500
     parts: list[str] = []
@@ -145,6 +163,8 @@ def _post_slack_markdown(title: str, body: str) -> None:
                 f"[review_summary] Slack POST failed: {r.status_code} {r.text[:300]}",
                 file=sys.stderr,
             )
+            return False
+    return True
 
 
 def maybe_send_after_ingest(
@@ -179,9 +199,11 @@ def maybe_send_after_ingest(
     title = f"新規レビュー要約（{snapshot_date}）"
     meta = f"ingest_run_id: `{ingest_run_id}`"
     body = f"{meta}\n\n{summary}"
-    _post_slack_markdown(title, body)
+    slack_ok = _post_slack_markdown(title, body)
     if config.REVIEW_SUMMARY_SLACK_DRY_RUN:
         return "dry_run_logged"
     if not _slack_webhook_url():
         return "summarized_no_webhook"
+    if not slack_ok:
+        return "slack_post_failed"
     return "sent"

@@ -159,7 +159,7 @@ def run_ingest():
         )
         store_name = place.get("display_name") or ""
         new_reviews = [
-            r for r in reviews if (r.get("provider_review_id") or "") not in existing_ids
+            r for r in reviews if (r.get("provider_review_id") or "").strip() not in existing_ids
         ]
         bq_ops.merge_reviews(
             store_code=store_code,
@@ -379,6 +379,11 @@ def run_ingest():
     except Exception as e:
         print(f"[review_observation] review summary pipeline failed: {e}", file=sys.stderr)
         review_summary_status = "error"
+    print(
+        f"[review_observation] review_summary={review_summary_status} "
+        f"new_reviews_count={new_review_total}",
+        flush=True,
+    )
 
     sheets_updated = False
     if config.SHEET_ID:

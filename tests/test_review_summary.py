@@ -34,6 +34,31 @@ def test_maybe_send_dry_run(monkeypatch):
     assert out == "dry_run_logged"
 
 
+def test_maybe_send_slack_post_failed(monkeypatch):
+    stores = [
+        {
+            "store_name": "テスト店",
+            "reviews": [{"rating": 5.0, "review_text": "良い", "provider_review_id": "c"}],
+        }
+    ]
+    monkeypatch.setattr(review_summary.config, "REVIEW_SUMMARY_ENABLED", True)
+    monkeypatch.setattr(review_summary.config, "REVIEW_SUMMARY_SLACK_DRY_RUN", False)
+    monkeypatch.setattr(review_summary.config, "GEMINI_API_KEY", "fake-key")
+    monkeypatch.setattr(review_summary.config, "SLACK_WEBHOOK_URL", "https://hooks.slack.com/test")
+
+    class BadResp:
+        ok = False
+        status_code = 400
+        text = "invalid_payload"
+
+    with (
+        mock.patch("src.review_summary._summarize_with_gemini", return_value="要約本文"),
+        mock.patch("src.review_summary.requests.post", return_value=BadResp()),
+    ):
+        out = review_summary.maybe_send_after_ingest("2026-01-01", "run-1", stores)
+    assert out == "slack_post_failed"
+
+
 def test_maybe_send_no_gemini_key(monkeypatch):
     stores = [
         {
