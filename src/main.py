@@ -169,6 +169,11 @@ def run_ingest():
             ingest_run_id=ingest_run_id,
             store_name=store_name,
         )
+        print(
+            f"[review_observation] ingest_store_ok store={store_code} "
+            f"gbp_total_review_count={total_count} fetched_reviews={len(reviews)}",
+            flush=True,
+        )
         count_1 = sum(1 for r in reviews if r.get("rating") == 1.0)
         count_5 = sum(1 for r in reviews if r.get("rating") == 5.0)
         rating_row = {
@@ -408,6 +413,10 @@ def run_ingest():
     #     except Exception as e:
     #         print(f"[review_observation] Slack notification failed: {e}", file=sys.stderr)
 
+    error_store_codes = sorted(
+        sc for sc, (r_row, _, _) in results_by_store.items() if r_row.get("status") == "error"
+    )
+
     return jsonify(
         {
             "ok": True,
@@ -415,6 +424,7 @@ def run_ingest():
             "snapshot_date": snapshot_date.isoformat(),
             "processed": len(rating_rows),
             "errors": errors,
+            "error_store_codes": error_store_codes,
             "sheets_updated": sheets_updated,
             "new_reviews_count": new_review_total,
             "review_summary": review_summary_status,
