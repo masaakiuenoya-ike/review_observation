@@ -173,7 +173,7 @@ GCP の BigQuery / Sheets 等を使う場合は、`gcloud auth application-defau
 
 | 環境変数 | 説明 |
 |----------|------|
-| `REVIEW_SUMMARY_ENABLED` | `true` で有効（既定は無効） |
+| `REVIEW_SUMMARY_ENABLED` | `true` で有効。**GitHub Actions デプロイでは Secret 未設定時に `true` を注入**（ローカル既定は無効のまま） |
 | `REVIEW_SUMMARY_USE_VERTEX_AI` | `true` で Vertex AI 経由（既定 `false`＝API キー方式） |
 | `VERTEX_AI_PROJECT` | Vertex の GCP プロジェクト ID（省略時は `GCP_PROJECT_ID` → `ikeuchi-data-sync`） |
 | `VERTEX_AI_LOCATION` | Vertex のリージョン（省略時 `us-central1`。東京寄せは `asia-northeast1` 等。モデルにより利用可能リージョンが異なる） |
@@ -184,7 +184,7 @@ GCP の BigQuery / Sheets 等を使う場合は、`gcloud auth application-defau
 
 HTTP 応答 JSON に `new_reviews_count` と `review_summary`（`disabled` / `sent` / `dry_run_logged` 等）が付く。
 
-**Cloud Run（本番）**: GitHub **Actions の Secrets** に `REVIEW_SUMMARY_USE_VERTEX_AI` / `VERTEX_AI_*` または `GEMINI_API_KEY` を登録し、デプロイで注入する（ログには `is set: yes` のみ）。手動デプロイなら `gcloud run services update ... --set-env-vars` でも可。
+**Cloud Run（本番）**: GitHub **Actions の Secrets** に `REVIEW_SUMMARY_USE_VERTEX_AI` / `VERTEX_AI_PROJECT` / `VERTEX_AI_LOCATION` または `GEMINI_API_KEY` を登録する（Vertex 用 3 つは deploy の `env` から渡す。**以前は Vertex 用 Secret が workflow に無く注入されない不具合があった**）。要約を止めたいだけなら Secret `REVIEW_SUMMARY_ENABLED=false`。手動デプロイなら `gcloud run services update ... --set-env-vars` でも可。
 
 ---
 

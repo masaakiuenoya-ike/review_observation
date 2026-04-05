@@ -38,8 +38,8 @@ def health():
 @app.route("/sheets-update", methods=["POST"])
 def run_sheets_update():
     """
-    BQ の v_latest_available_ratings / v_latest_available_alerts を読んで
-    Sheets の LATEST / ALERT / サマリ のみ更新する。取込は行わない。
+    BQ の VIEW を読んで Sheets を更新する（LATEST / ALERT / サマリ / 月次パフォーマンス）。
+    取込は行わない。
     store_name を反映したいときや、取込がタイムアウトしてシートが更新されていないときに実行する。
     """
     print("[review_observation] POST /sheets-update started", flush=True)
@@ -47,7 +47,10 @@ def run_sheets_update():
         return jsonify({"ok": False, "error": "SHEET_ID not set"}), 400
     try:
         sheets_writer.write_latest_and_alerts()
-        print("[review_observation] Sheets LATEST/ALERT/サマリ updated", flush=True)
+        print(
+            f"[review_observation] Sheets LATEST/ALERT/サマリ/{config.SHEET_TAB_PERFORMANCE_MONTHLY} updated",
+            flush=True,
+            )
     except Exception as e:
         print(f"[review_observation] sheets-update failed: {e}", file=sys.stderr)
         return jsonify({"ok": False, "error": str(e)}), 500
@@ -395,7 +398,10 @@ def run_ingest():
         try:
             sheets_writer.write_latest_and_alerts()
             sheets_updated = True
-            print("[review_observation] Sheets LATEST/ALERT/サマリ updated", flush=True)
+            print(
+                f"[review_observation] Sheets LATEST/ALERT/サマリ/{config.SHEET_TAB_PERFORMANCE_MONTHLY} updated",
+                flush=True,
+            )
         except Exception as e:
             print(
                 f"[review_observation] Sheets update failed: {e}",

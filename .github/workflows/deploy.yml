@@ -6,10 +6,10 @@
 #   GCP_WIF_SERVICE_ACCOUNT - デプロイ用 SA（例: sa-review-observation-deploy@ikeuchi-data-sync.iam.gserviceaccount.com）
 #   GCS_EXPORT_BUCKET       - CSV 出力用 GCS バケット名（Cloud Run の環境変数に渡す）
 #   SHEET_ID                - 書き込み先 Google スプレッドシートの ID（Cloud Run の環境変数に渡す）
-# 任意: SLACK_WEBHOOK_URL（Incoming Webhook URL。設定時のみ Cloud Run に渡し、取込後に Slack 通知）
-# 任意: GEMINI_API_KEY（新規レビュー要約・API キー方式）
-# 任意: REVIEW_SUMMARY_USE_VERTEX_AI / VERTEX_AI_PROJECT / VERTEX_AI_LOCATION（Vertex AI 方式）
-# 任意: REVIEW_SUMMARY_ENABLED / REVIEW_SUMMARY_SLACK_DRY_RUN / REVIEW_SUMMARY_SLACK_WEBHOOK_URL / GEMINI_MODEL
+# 任意: SLACK_WEBHOOK_URL（Incoming Webhook URL。日次サマリ・要約の Webhook にも流用可）
+# 新規レビュー要約: REVIEW_SUMMARY_ENABLED は Secret 未設定時 true を注入。無効化は Secret で false。
+# 任意: GEMINI_API_KEY / GEMINI_MODEL（API キー方式）または REVIEW_SUMMARY_USE_VERTEX_AI / VERTEX_AI_PROJECT / VERTEX_AI_LOCATION
+# 任意: REVIEW_SUMMARY_SLACK_DRY_RUN / REVIEW_SUMMARY_SLACK_WEBHOOK_URL
 # 任意: GCP_PROJECT_ID（未設定時は ikeuchi-data-sync を使用）
 
 name: Deploy to Cloud Run
@@ -140,6 +140,9 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
           REVIEW_SUMMARY_ENABLED: ${{ secrets.REVIEW_SUMMARY_ENABLED }}
+          REVIEW_SUMMARY_USE_VERTEX_AI: ${{ secrets.REVIEW_SUMMARY_USE_VERTEX_AI }}
+          VERTEX_AI_PROJECT: ${{ secrets.VERTEX_AI_PROJECT }}
+          VERTEX_AI_LOCATION: ${{ secrets.VERTEX_AI_LOCATION }}
           REVIEW_SUMMARY_SLACK_DRY_RUN: ${{ secrets.REVIEW_SUMMARY_SLACK_DRY_RUN }}
           REVIEW_SUMMARY_SLACK_WEBHOOK_URL: ${{ secrets.REVIEW_SUMMARY_SLACK_WEBHOOK_URL }}
         run: |
@@ -153,7 +156,14 @@ jobs:
           echo "SLACK_WEBHOOK_URL is set: $([ -n \"${SLACK_WEBHOOK_URL}\" ] && echo yes || echo no)"
           echo "GEMINI_API_KEY is set: $([ -n \"${GEMINI_API_KEY}\" ] && echo yes || echo no)"
           echo "REVIEW_SUMMARY_USE_VERTEX_AI is set: $([ -n \"${REVIEW_SUMMARY_USE_VERTEX_AI}\" ] && echo yes || echo no)"
-          ENV_VARS="TZ=Asia/Tokyo,BQ_PROJECT=ikeuchi-ga4,BQ_DATASET=mart_gbp,BQ_LOCATION=${{ env.REGION }},GBP_OAUTH_SECRET_NAME=gbp-oauth-json,SHEET_TAB_LATEST=LATEST,SHEET_TAB_ALERT=ALERT,SHEET_TAB_PERFORMANCE_MONTHLY=Google_Monthly_Performance,PROVIDER=google,ALERT_LOW_RATING=4.2,ALERT_DROP_RATING=-0.2,ALERT_SURGE_REVIEWS=10,MAX_WORKERS=1"
+          echo "VERTEX_AI_PROJECT is set: $([ -n \"${VERTEX_AI_PROJECT}\" ] && echo yes || echo no)"
+          # 新規レビュー要約: シークレット未設定時は true（従来は未注入で常に disabled になっていた）
+          if [ -n "${REVIEW_SUMMARY_ENABLED}" ]; then
+            RSUM_ENABLED="${REVIEW_SUMMARY_ENABLED}"
+          else
+            RSUM_ENABLED="true"
+          fi
+          ENV_VARS="TZ=Asia/Tokyo,BQ_PROJECT=ikeuchi-ga4,BQ_DATASET=mart_gbp,BQ_LOCATION=${{ env.REGION }},GBP_OAUTH_SECRET_NAME=gbp-oauth-json,SHEET_TAB_LATEST=LATEST,SHEET_TAB_ALERT=ALERT,SHEET_TAB_PERFORMANCE_MONTHLY=Google_Monthly_Performance,PROVIDER=google,ALERT_LOW_RATING=4.2,ALERT_DROP_RATING=-0.2,ALERT_SURGE_REVIEWS=10,MAX_WORKERS=1,REVIEW_SUMMARY_ENABLED=${RSUM_ENABLED}"
           [ -n "${SHEET_ID}" ] && ENV_VARS="${ENV_VARS},SHEET_ID=${SHEET_ID}"
           [ -n "${GCS_EXPORT_BUCKET}" ] && ENV_VARS="${ENV_VARS},GCS_EXPORT_BUCKET=${GCS_EXPORT_BUCKET}"
           [ -n "${SLACK_WEBHOOK_URL}" ] && ENV_VARS="${ENV_VARS},SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}"
@@ -162,7 +172,6 @@ jobs:
           [ -n "${REVIEW_SUMMARY_USE_VERTEX_AI}" ] && ENV_VARS="${ENV_VARS},REVIEW_SUMMARY_USE_VERTEX_AI=${REVIEW_SUMMARY_USE_VERTEX_AI}"
           [ -n "${VERTEX_AI_PROJECT}" ] && ENV_VARS="${ENV_VARS},VERTEX_AI_PROJECT=${VERTEX_AI_PROJECT}"
           [ -n "${VERTEX_AI_LOCATION}" ] && ENV_VARS="${ENV_VARS},VERTEX_AI_LOCATION=${VERTEX_AI_LOCATION}"
-          [ -n "${REVIEW_SUMMARY_ENABLED}" ] && ENV_VARS="${ENV_VARS},REVIEW_SUMMARY_ENABLED=${REVIEW_SUMMARY_ENABLED}"
           [ -n "${REVIEW_SUMMARY_SLACK_DRY_RUN}" ] && ENV_VARS="${ENV_VARS},REVIEW_SUMMARY_SLACK_DRY_RUN=${REVIEW_SUMMARY_SLACK_DRY_RUN}"
           [ -n "${REVIEW_SUMMARY_SLACK_WEBHOOK_URL}" ] && ENV_VARS="${ENV_VARS},REVIEW_SUMMARY_SLACK_WEBHOOK_URL=${REVIEW_SUMMARY_SLACK_WEBHOOK_URL}"
           gcloud run deploy ${{ env.SERVICE_NAME }} \

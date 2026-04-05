@@ -547,10 +547,12 @@ gcloud scheduler jobs create http review-observation-monthly \
 
 ### 10.5b Sheets のみ更新（store_name 反映・取込タイムアウト時用）
 
-取込は行わず、BQ の v_latest_available_ratings / v_latest_available_alerts を読んで **Sheets の LATEST / ALERT / サマリだけ**更新する。取込が 30 分でタイムアウトしてシートが更新されないときや、**store_name** をすぐ反映したいときに使う。
+取込は行わず、BQ の VIEW を読んで **Sheets の LATEST / ALERT / サマリ / `Google_Monthly_Performance`（環境変数 `SHEET_TAB_PERFORMANCE_MONTHLY`）** を更新する。取込がタイムアウトしてシートが更新されないときや、**store_name**・月次指標をすぐ反映したいときに使う。
+
+**手動実行**: コンソールの Cloud Scheduler で対象ジョブの「今すぐ実行」でもよい。CLI なら §10.6 の `gcloud scheduler jobs run review-observation-sheets-update`。**OIDC 付き HTTP ジョブ**なら curl と同等の認証で Cloud Run が呼ばれる。
 
 ```bash
-# 手動で 1 回実行（Scheduler ジョブを作る場合は下記を参考に）
+# curl で手動（Scheduler ジョブを作っている場合は run の方が簡単なことも多い）
 curl -X POST -H "Authorization: Bearer $(gcloud auth print-identity-token --audiences=https://review-observation-XXXX.run.app)" \
   https://review-observation-XXXX.run.app/sheets-update
 ```
