@@ -61,8 +61,8 @@ LEFT JOIN yesterday y
 LEFT JOIN `YOUR_DATASET.places_provider_map` p ON t.store_code = p.store_code AND t.provider = p.provider;
 
 -- 5.2 v_latest_with_delta_performance（日次）
--- 注意: performance_daily_snapshot には現状どこからも投入していないため、この VIEW は 0 行のまま。
--- 日次パフォーマンス取込ジョブを実装すると更新される。月次データを見たい場合は v_latest_available_performance_monthly を使用。
+-- 日次は scripts/sync_gbp_performance_to_bq.py が performance_daily_snapshot に投入すると更新される。
+-- 月次レポート・スプレッドシートは performance_monthly_snapshot または v_latest_available_performance_monthly を参照。
 CREATE OR REPLACE VIEW `YOUR_DATASET.v_latest_with_delta_performance` AS
 WITH today AS (
   SELECT * FROM `YOUR_DATASET.performance_daily_snapshot`

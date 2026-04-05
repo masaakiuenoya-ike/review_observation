@@ -1,6 +1,9 @@
 """
-BigQuery VIEW（v_latest_available_ratings / v_latest_available_alerts）を参照し、
-Google Sheets の LATEST / ALERT / サマリ タブを更新する。
+BigQuery VIEW を参照し Google Sheets を更新する。
+  - v_latest_available_ratings → LATEST
+  - v_latest_available_alerts → ALERT
+  - 集計 → サマリ
+  - v_latest_available_performance_monthly → Google_Monthly_Performance タブ（環境変数で変更可）
 直近の取込日で表示するため、当日の取込がなくても値が出る。
 """
 
@@ -39,6 +42,26 @@ ALERT_COLUMNS = [
     "rating_value",
     "delta_rating",
     "delta_review_count",
+]
+
+# 月次パフォーマンス（v_latest_available_performance_monthly の列順）
+PERFORMANCE_MONTHLY_COLUMNS = [
+    "snapshot_date",
+    "store_code",
+    "store_name",
+    "provider",
+    "provider_place_id",
+    "impressions",
+    "calls",
+    "direction_requests",
+    "website_clicks",
+    "fetched_at",
+    "ingest_run_id",
+    "status",
+    "delta_impressions",
+    "delta_calls",
+    "delta_direction_requests",
+    "delta_website_clicks",
 ]
 
 
@@ -130,14 +153,19 @@ def _get_sheets_service():
 
 
 def _ensure_tabs_exist(service: Any, sheet_id: str) -> None:
-    """LATEST / ALERT / サマリ タブが無ければ作成する。"""
+    """LATEST / ALERT / サマリ / 月次パフォーマンス タブが無ければ作成する。"""
     meta = (
         service.spreadsheets()
         .get(spreadsheetId=sheet_id, fields="sheets(properties(title))")
         .execute()
     )
     existing = {s["properties"]["title"] for s in meta.get("sheets", [])}
-    required = {config.SHEET_TAB_LATEST, config.SHEET_TAB_ALERT, config.SHEET_TAB_SUMMARY}
+    required = {
+        config.SHEET_TAB_LATEST,
+        config.SHEET_TAB_ALERT,
+        config.SHEET_TAB_SUMMARY,
+        config.SHEET_TAB_PERFORMANCE_MONTHLY,
+    }
     missing = required - existing
     if not missing:
         return
@@ -173,8 +201,9 @@ def _clear_and_update(sheet_id: str, tab_name: str, rows: list[list[Any]]) -> No
 def write_latest_and_alerts() -> None:
     """
     SHEET_ID が設定されていれば、v_latest_available_ratings → LATEST、
-    v_latest_available_alerts → ALERT、集計 → サマリ タブを全置換する。未設定なら何もしない。
-    直近の取込日で表示するため、当日の取込がなくても値が出る。
+    v_latest_available_alerts → ALERT、集計 → サマリ、
+    v_latest_available_performance_monthly → SHEET_TAB_PERFORMANCE_MONTHLY タブを全置換する。
+    未設定なら何もしない。直近の取込日で表示するため、当日の取込がなくても値が出る。
     必要なタブが無い場合は自動作成する。
     """
     import sys
@@ -191,12 +220,19 @@ def write_latest_and_alerts() -> None:
     client = bq_ops.get_client()
     latest_rows = _fetch_view(client, "v_latest_available_ratings", LATEST_COLUMNS)
     alert_rows = _fetch_view(client, "v_latest_available_alerts", ALERT_COLUMNS)
+    perf_rows = _fetch_view(
+        client,
+        "v_latest_available_performance_monthly",
+        PERFORMANCE_MONTHLY_COLUMNS,
+    )
     summary_rows = _fetch_summary_rows(client)
     # 件数ログ（ヘッダー1行含む。0件なら VIEW が空か BQ 権限の可能性）
     n_latest = len(latest_rows)
     n_alert = len(alert_rows)
+    n_perf = len(perf_rows)
     print(
-        f"[review_observation] Sheets: LATEST={n_latest} rows, ALERT={n_alert} rows (from BQ)",
+        f"[review_observation] Sheets: LATEST={n_latest} rows, ALERT={n_alert} rows, "
+        f"{config.SHEET_TAB_PERFORMANCE_MONTHLY}={n_perf} rows (from BQ)",
         flush=True,
     )
     if n_latest <= 1:
@@ -205,6 +241,14 @@ def write_latest_and_alerts() -> None:
             file=sys.stderr,
             flush=True,
         )
+    if n_perf <= 1:
+        print(
+            "[review_observation] Sheets: v_latest_available_performance_monthly returned no data rows; "
+            "run scripts/sync_gbp_performance_to_bq.py and ensure sql/002 VIEW exists",
+            file=sys.stderr,
+            flush=True,
+        )
     _clear_and_update(config.SHEET_ID, config.SHEET_TAB_LATEST, latest_rows)
     _clear_and_update(config.SHEET_ID, config.SHEET_TAB_ALERT, alert_rows)
     _clear_and_update(config.SHEET_ID, config.SHEET_TAB_SUMMARY, summary_rows)
+    _clear_and_update(config.SHEET_ID, config.SHEET_TAB_PERFORMANCE_MONTHLY, perf_rows)

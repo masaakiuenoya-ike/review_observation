@@ -21,6 +21,9 @@ SHEET_ID = (os.environ.get("SHEET_ID") or "").strip()
 SHEET_TAB_LATEST = os.environ.get("SHEET_TAB_LATEST", "LATEST")
 SHEET_TAB_ALERT = os.environ.get("SHEET_TAB_ALERT", "ALERT")
 SHEET_TAB_SUMMARY = os.environ.get("SHEET_TAB_SUMMARY", "サマリ")
+SHEET_TAB_PERFORMANCE_MONTHLY = os.environ.get(
+    "SHEET_TAB_PERFORMANCE_MONTHLY", "Google_Monthly_Performance"
+)
 
 # Slack（未設定なら通知スキップ）
 SLACK_WEBHOOK_URL = (os.environ.get("SLACK_WEBHOOK_URL") or "").strip()

@@ -1,5 +1,5 @@
 """
-BigQuery: places_provider_map 読込、ratings_daily_snapshot MERGE、reviews MERGE。
+BigQuery: places_provider_map 読込、ratings / reviews / performance スナップショットの MERGE。
 """
 
 from __future__ import annotations
@@ -273,3 +273,199 @@ def merge_reviews(
                 f"[bq_ops] merge_reviews store={store_code} progress {offset + len(batch)}/{total}",
                 file=sys.stderr,
             )
+
+
+_PERF_MERGE_BATCH = 200
+
+
+def merge_performance_daily_snapshot(ingest_run_id: str, rows: list[dict[str, Any]]) -> None:
+    """
+    performance_daily_snapshot に MERGE（snapshot_date + store_code + provider）。
+    rows: snapshot_date(date), store_code, provider, provider_place_id, impressions, calls,
+          direction_requests, website_clicks, status, error_code?, error_message?
+    """
+    if not rows:
+        return
+    client = get_client()
+    ds = config.BQ_DATASET
+    table = f"{config.BQ_PROJECT}.{ds}.performance_daily_snapshot"
+    for offset in range(0, len(rows), _PERF_MERGE_BATCH):
+        chunk = rows[offset : offset + _PERF_MERGE_BATCH]
+        dates_s = [r["snapshot_date"].isoformat() for r in chunk]
+        store_codes = [r["store_code"] for r in chunk]
+        providers = [r["provider"] for r in chunk]
+        place_ids = [r.get("provider_place_id") or "" for r in chunk]
+        impressions = [int(r.get("impressions") or 0) for r in chunk]
+        calls = [int(r.get("calls") or 0) for r in chunk]
+        direction_requests = [int(r.get("direction_requests") or 0) for r in chunk]
+        website_clicks = [int(r.get("website_clicks") or 0) for r in chunk]
+        statuses = [r.get("status") or "ok" for r in chunk]
+        error_codes = [(r.get("error_code") or "") for r in chunk]
+        error_messages = [(r.get("error_message") or "") for r in chunk]
+        sql = f"""
+        MERGE `{table}` AS T
+        USING (
+            SELECT
+                PARSE_DATE('%Y-%m-%d', s.d) AS snapshot_date,
+                s.sc AS store_code,
+                s.p AS provider,
+                s.pid AS provider_place_id,
+                s.imp AS impressions,
+                s.ca AS calls,
+                s.dr AS direction_requests,
+                s.wc AS website_clicks,
+                @ingest_run_id AS ingest_run_id,
+                s.st AS status,
+                NULLIF(s.ec, '') AS error_code,
+                NULLIF(s.em, '') AS error_message
+            FROM (
+                SELECT d, sc, p, pid, imp, ca, dr, wc, st, ec, em
+                FROM UNNEST(@dates_s) AS d WITH OFFSET o
+                JOIN UNNEST(@store_codes) AS sc WITH OFFSET o1 ON o = o1
+                JOIN UNNEST(@providers) AS p WITH OFFSET o2 ON o = o2
+                JOIN UNNEST(@place_ids) AS pid WITH OFFSET o3 ON o = o3
+                JOIN UNNEST(@impressions) AS imp WITH OFFSET o4 ON o = o4
+                JOIN UNNEST(@calls) AS ca WITH OFFSET o5 ON o = o5
+                JOIN UNNEST(@direction_requests) AS dr WITH OFFSET o6 ON o = o6
+                JOIN UNNEST(@website_clicks) AS wc WITH OFFSET o7 ON o = o7
+                JOIN UNNEST(@statuses) AS st WITH OFFSET o8 ON o = o8
+                JOIN UNNEST(@error_codes) AS ec WITH OFFSET o9 ON o = o9
+                JOIN UNNEST(@error_messages) AS em WITH OFFSET o10 ON o = o10
+            ) AS s
+        ) AS S
+        ON T.snapshot_date = S.snapshot_date AND T.store_code = S.store_code AND T.provider = S.provider
+        WHEN MATCHED THEN UPDATE SET
+            provider_place_id = S.provider_place_id,
+            impressions = S.impressions,
+            calls = S.calls,
+            direction_requests = S.direction_requests,
+            website_clicks = S.website_clicks,
+            fetched_at = CURRENT_TIMESTAMP(),
+            ingest_run_id = S.ingest_run_id,
+            status = S.status,
+            error_code = S.error_code,
+            error_message = S.error_message
+        WHEN NOT MATCHED THEN INSERT (
+            snapshot_date, store_code, provider, provider_place_id,
+            impressions, calls, direction_requests, website_clicks,
+            fetched_at, ingest_run_id, status, error_code, error_message
+        ) VALUES (
+            S.snapshot_date, S.store_code, S.provider, S.provider_place_id,
+            S.impressions, S.calls, S.direction_requests, S.website_clicks,
+            CURRENT_TIMESTAMP(), S.ingest_run_id, S.status, S.error_code, S.error_message
+        )
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("ingest_run_id", "STRING", ingest_run_id),
+                bigquery.ArrayQueryParameter("dates_s", "STRING", dates_s),
+                bigquery.ArrayQueryParameter("store_codes", "STRING", store_codes),
+                bigquery.ArrayQueryParameter("providers", "STRING", providers),
+                bigquery.ArrayQueryParameter("place_ids", "STRING", place_ids),
+                bigquery.ArrayQueryParameter("impressions", "INT64", impressions),
+                bigquery.ArrayQueryParameter("calls", "INT64", calls),
+                bigquery.ArrayQueryParameter("direction_requests", "INT64", direction_requests),
+                bigquery.ArrayQueryParameter("website_clicks", "INT64", website_clicks),
+                bigquery.ArrayQueryParameter("statuses", "STRING", statuses),
+                bigquery.ArrayQueryParameter("error_codes", "STRING", error_codes),
+                bigquery.ArrayQueryParameter("error_messages", "STRING", error_messages),
+            ]
+        )
+        job = client.query(sql, job_config=job_config)
+        job.result(timeout=120)
+
+
+def merge_performance_monthly_snapshot(ingest_run_id: str, rows: list[dict[str, Any]]) -> None:
+    """
+    performance_monthly_snapshot に MERGE（snapshot_month + store_code + provider）。
+    snapshot_month はその月の初日 DATE。
+    """
+    if not rows:
+        return
+    client = get_client()
+    ds = config.BQ_DATASET
+    table = f"{config.BQ_PROJECT}.{ds}.performance_monthly_snapshot"
+    for offset in range(0, len(rows), _PERF_MERGE_BATCH):
+        chunk = rows[offset : offset + _PERF_MERGE_BATCH]
+        months_s = [r["snapshot_month"].isoformat() for r in chunk]
+        store_codes = [r["store_code"] for r in chunk]
+        providers = [r["provider"] for r in chunk]
+        place_ids = [r.get("provider_place_id") or "" for r in chunk]
+        impressions = [int(r.get("impressions") or 0) for r in chunk]
+        calls = [int(r.get("calls") or 0) for r in chunk]
+        direction_requests = [int(r.get("direction_requests") or 0) for r in chunk]
+        website_clicks = [int(r.get("website_clicks") or 0) for r in chunk]
+        statuses = [r.get("status") or "ok" for r in chunk]
+        error_codes = [(r.get("error_code") or "") for r in chunk]
+        error_messages = [(r.get("error_message") or "") for r in chunk]
+        sql = f"""
+        MERGE `{table}` AS T
+        USING (
+            SELECT
+                PARSE_DATE('%Y-%m-%d', s.m) AS snapshot_month,
+                s.sc AS store_code,
+                s.p AS provider,
+                s.pid AS provider_place_id,
+                s.imp AS impressions,
+                s.ca AS calls,
+                s.dr AS direction_requests,
+                s.wc AS website_clicks,
+                @ingest_run_id AS ingest_run_id,
+                s.st AS status,
+                NULLIF(s.ec, '') AS error_code,
+                NULLIF(s.em, '') AS error_message
+            FROM (
+                SELECT m, sc, p, pid, imp, ca, dr, wc, st, ec, em
+                FROM UNNEST(@months_s) AS m WITH OFFSET o
+                JOIN UNNEST(@store_codes) AS sc WITH OFFSET o1 ON o = o1
+                JOIN UNNEST(@providers) AS p WITH OFFSET o2 ON o = o2
+                JOIN UNNEST(@place_ids) AS pid WITH OFFSET o3 ON o = o3
+                JOIN UNNEST(@impressions) AS imp WITH OFFSET o4 ON o = o4
+                JOIN UNNEST(@calls) AS ca WITH OFFSET o5 ON o = o5
+                JOIN UNNEST(@direction_requests) AS dr WITH OFFSET o6 ON o = o6
+                JOIN UNNEST(@website_clicks) AS wc WITH OFFSET o7 ON o = o7
+                JOIN UNNEST(@statuses) AS st WITH OFFSET o8 ON o = o8
+                JOIN UNNEST(@error_codes) AS ec WITH OFFSET o9 ON o = o9
+                JOIN UNNEST(@error_messages) AS em WITH OFFSET o10 ON o = o10
+            ) AS s
+        ) AS S
+        ON T.snapshot_month = S.snapshot_month AND T.store_code = S.store_code AND T.provider = S.provider
+        WHEN MATCHED THEN UPDATE SET
+            provider_place_id = S.provider_place_id,
+            impressions = S.impressions,
+            calls = S.calls,
+            direction_requests = S.direction_requests,
+            website_clicks = S.website_clicks,
+            fetched_at = CURRENT_TIMESTAMP(),
+            ingest_run_id = S.ingest_run_id,
+            status = S.status,
+            error_code = S.error_code,
+            error_message = S.error_message
+        WHEN NOT MATCHED THEN INSERT (
+            snapshot_month, store_code, provider, provider_place_id,
+            impressions, calls, direction_requests, website_clicks,
+            fetched_at, ingest_run_id, status, error_code, error_message
+        ) VALUES (
+            S.snapshot_month, S.store_code, S.provider, S.provider_place_id,
+            S.impressions, S.calls, S.direction_requests, S.website_clicks,
+            CURRENT_TIMESTAMP(), S.ingest_run_id, S.status, S.error_code, S.error_message
+        )
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("ingest_run_id", "STRING", ingest_run_id),
+                bigquery.ArrayQueryParameter("months_s", "STRING", months_s),
+                bigquery.ArrayQueryParameter("store_codes", "STRING", store_codes),
+                bigquery.ArrayQueryParameter("providers", "STRING", providers),
+                bigquery.ArrayQueryParameter("place_ids", "STRING", place_ids),
+                bigquery.ArrayQueryParameter("impressions", "INT64", impressions),
+                bigquery.ArrayQueryParameter("calls", "INT64", calls),
+                bigquery.ArrayQueryParameter("direction_requests", "INT64", direction_requests),
+                bigquery.ArrayQueryParameter("website_clicks", "INT64", website_clicks),
+                bigquery.ArrayQueryParameter("statuses", "STRING", statuses),
+                bigquery.ArrayQueryParameter("error_codes", "STRING", error_codes),
+                bigquery.ArrayQueryParameter("error_messages", "STRING", error_messages),
+            ]
+        )
+        job = client.query(sql, job_config=job_config)
+        job.result(timeout=120)
