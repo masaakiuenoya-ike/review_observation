@@ -51,7 +51,9 @@ def _print_curl(location_id: str, metrics: list[str], start: date, end: date) ->
     qs = "&".join(
         f"{requests.utils.quote(k, safe='')}={requests.utils.quote(v, safe='')}" for k, v in q
     )
-    url = f"{gbp_performance.PERF_BASE}/locations/{location_id}:fetchMultiDailyMetricsTimeSeries?{qs}"
+    url = (
+        f"{gbp_performance.PERF_BASE}/locations/{location_id}:fetchMultiDailyMetricsTimeSeries?{qs}"
+    )
     print("--- curl 例（YOUR_TOKEN を差し替え） ---", flush=True)
     print(
         f"curl -sS -H 'Authorization: Bearer YOUR_TOKEN' '{url}' | python3 -m json.tool",
