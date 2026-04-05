@@ -50,7 +50,7 @@ def run_sheets_update():
         print(
             f"[review_observation] Sheets LATEST/ALERT/サマリ/{config.SHEET_TAB_PERFORMANCE_MONTHLY} updated",
             flush=True,
-            )
+        )
     except Exception as e:
         print(f"[review_observation] sheets-update failed: {e}", file=sys.stderr)
         return jsonify({"ok": False, "error": str(e)}), 500
