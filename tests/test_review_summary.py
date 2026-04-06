@@ -76,6 +76,16 @@ def test_maybe_send_no_gemini_key(monkeypatch):
     )
 
 
+def test_vertex_gemini_model_id_maps_unversioned_flash(monkeypatch):
+    monkeypatch.setattr(review_summary.config, "GEMINI_MODEL", "gemini-2.0-flash")
+    assert review_summary._vertex_gemini_model_id() == "gemini-2.0-flash-001"
+
+
+def test_vertex_gemini_model_id_keeps_versioned(monkeypatch):
+    monkeypatch.setattr(review_summary.config, "GEMINI_MODEL", "gemini-2.0-flash-001")
+    assert review_summary._vertex_gemini_model_id() == "gemini-2.0-flash-001"
+
+
 def test_maybe_send_vertex_dry_run(monkeypatch):
     stores = [
         {

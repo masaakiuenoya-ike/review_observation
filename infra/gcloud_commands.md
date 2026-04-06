@@ -193,6 +193,20 @@ bq update --dataset \
   ikeuchi-ga4:mart_gbp
 ```
 
+### 6.3 Vertex AI（新規レビュー要約・Cloud Run 実行 SA）
+
+`REVIEW_SUMMARY_USE_VERTEX_AI=true` かつ `VERTEX_AI_PROJECT=ikeuchi-data-sync` のとき、**実行 SA** に予測権限が必要です（デプロイ用 SA ではない）。
+
+```bash
+gcloud projects add-iam-policy-binding ikeuchi-data-sync \
+  --member="serviceAccount:sa-review-observation-run@ikeuchi-data-sync.iam.gserviceaccount.com" \
+  --role="roles/aiplatform.user"
+```
+
+`VERTEX_AI_PROJECT` を **ikeuchi-ga4** など別プロジェクトにしている場合は、**そのプロジェクト**でも同様に `roles/aiplatform.user` を付与する。
+
+> **IAM に `sa-review-observation-run` が無い場合**: まだ §4 で SA を作成していない。作成後に §5.1.3・§6・本節・Sheets 共有を実施し、**再デプロイ**で Cloud Run のサービスアカウントをこの SA に揃える。
+
 ---
 
 ## 7. BigQuery: SQL適用（初回）

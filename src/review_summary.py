@@ -74,6 +74,18 @@ def _normalize_gemini_model_id() -> str:
     return m
 
 
+def _vertex_gemini_model_id() -> str:
+    """Vertex の GenerativeModel 用。無印 ID は Publisher 側で存在しないことがある。"""
+    m = _normalize_gemini_model_id()
+    if m == "gemini-2.0-flash":
+        return "gemini-2.0-flash-001"
+    if m == "gemini-1.5-flash":
+        return "gemini-1.5-flash-002"
+    if m == "gemini-1.5-pro":
+        return "gemini-1.5-pro-002"
+    return m
+
+
 def _ensure_vertex_init() -> None:
     global _vertex_inited
     with _vertex_lock:
@@ -105,7 +117,7 @@ def _summarize_via_vertex(payload_json: str) -> str | None:
     except Exception as e:
         print(f"[review_summary] Vertex init error: {e}", file=sys.stderr)
         return None
-    model_name = _normalize_gemini_model_id()
+    model_name = _vertex_gemini_model_id()
     try:
         model = GenerativeModel(model_name)
         response = model.generate_content(

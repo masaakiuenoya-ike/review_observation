@@ -48,7 +48,8 @@ REVIEW_SUMMARY_USE_VERTEX_AI = _env_bool("REVIEW_SUMMARY_USE_VERTEX_AI", False)
 # True のとき Slack へ POST せず、要約本文をログに出すだけ（Gemini は呼ぶ）
 REVIEW_SUMMARY_SLACK_DRY_RUN = _env_bool("REVIEW_SUMMARY_SLACK_DRY_RUN", False)
 GEMINI_API_KEY = (os.environ.get("GEMINI_API_KEY") or "").strip()
-GEMINI_MODEL = (os.environ.get("GEMINI_MODEL") or "gemini-2.0-flash").strip()
+# Vertex は Publisher モデル ID（例: gemini-2.0-flash-001）が必要。無印 gemini-2.0-flash は 404 になりやすい。
+GEMINI_MODEL = (os.environ.get("GEMINI_MODEL") or "gemini-2.0-flash-001").strip()
 # Vertex: プロジェクト未指定時は Cloud Run と同じ GCP_PROJECT_ID
 VERTEX_AI_PROJECT = (
     (os.environ.get("VERTEX_AI_PROJECT") or "").strip()
