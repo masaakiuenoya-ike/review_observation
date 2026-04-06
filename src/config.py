@@ -56,8 +56,9 @@ VERTEX_AI_PROJECT = (
     or (os.environ.get("GCP_PROJECT_ID") or "").strip()
     or "ikeuchi-data-sync"
 )
-# Vertex のリージョン（モデルによっては us-central1 が安定。東京に寄せるなら asia-northeast1）
-VERTEX_AI_LOCATION = (os.environ.get("VERTEX_AI_LOCATION") or "us-central1").strip()
+# Vertex のリージョン。Gemini Publisher モデルは global が公式例で、us-central1 だと 404 になるプロジェクトがある。
+# 固定リージョンにしたい場合は VERTEX_AI_LOCATION（例: us-central1, asia-northeast1）を環境変数で上書き。
+VERTEX_AI_LOCATION = (os.environ.get("VERTEX_AI_LOCATION") or "global").strip()
 # 未設定なら SLACK_WEBHOOK_URL を流用（本番とテストで分けたいときだけ設定）
 REVIEW_SUMMARY_SLACK_WEBHOOK_URL = (
     os.environ.get("REVIEW_SUMMARY_SLACK_WEBHOOK_URL") or ""
