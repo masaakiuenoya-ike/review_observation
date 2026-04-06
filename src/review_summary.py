@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import threading
 from typing import Any
@@ -86,6 +87,18 @@ def _vertex_gemini_model_id() -> str:
     return m
 
 
+def _optional_oauth_access_token_credentials():
+    """ADC が無い／期限切れのローカル用。GOOGLE_OAUTH_ACCESS_TOKEN=$(gcloud auth print-access-token)。"""
+    tok = (os.environ.get("GOOGLE_OAUTH_ACCESS_TOKEN") or "").strip()
+    if not tok:
+        return None
+    try:
+        from google.oauth2.credentials import Credentials
+    except ImportError:
+        return None
+    return Credentials(token=tok)
+
+
 def _ensure_vertex_init() -> None:
     global _vertex_inited
     with _vertex_lock:
@@ -93,10 +106,18 @@ def _ensure_vertex_init() -> None:
             return
         import vertexai
 
-        vertexai.init(
-            project=config.VERTEX_AI_PROJECT,
-            location=config.VERTEX_AI_LOCATION,
-        )
+        creds = _optional_oauth_access_token_credentials()
+        if creds is not None:
+            vertexai.init(
+                project=config.VERTEX_AI_PROJECT,
+                location=config.VERTEX_AI_LOCATION,
+                credentials=creds,
+            )
+        else:
+            vertexai.init(
+                project=config.VERTEX_AI_PROJECT,
+                location=config.VERTEX_AI_LOCATION,
+            )
         _vertex_inited = True
         print(
             f"[review_summary] Vertex AI init project={config.VERTEX_AI_PROJECT} "
